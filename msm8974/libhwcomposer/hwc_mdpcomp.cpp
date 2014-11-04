@@ -179,11 +179,12 @@ void MDPComp::setMDPCompLayerFlags(hwc_context_t *ctx,
 }
 
 MDPComp::FrameInfo::FrameInfo() {
+    memset(&mdpToLayer, 0, sizeof(mdpToLayer));
     reset(0);
 }
 
 void MDPComp::FrameInfo::reset(const int& numLayers) {
-    for(int i = 0 ; i < MAX_PIPES_PER_MIXER && numLayers; i++ ) {
+    for(int i = 0 ; i < MAX_PIPES_PER_MIXER; i++ ) {
         if(mdpToLayer[i].pipeInfo) {
             delete mdpToLayer[i].pipeInfo;
             mdpToLayer[i].pipeInfo = NULL;
@@ -275,8 +276,9 @@ bool MDPComp::isValidDimension(hwc_context_t *ctx, hwc_layer_1_t *layer) {
        qhwc::calculate_crop_rects(crop, dst, scissor, layer->transform);
     }
 
-    int crop_w = crop.right - crop.left;
-    int crop_h = crop.bottom - crop.top;
+    bool rotated90 = (bool)(layer->transform & HAL_TRANSFORM_ROT_90);
+    int crop_w = rotated90 ? crop.bottom - crop.top : crop.right - crop.left;
+    int crop_h = rotated90 ? crop.right - crop.left : crop.bottom - crop.top;
     int dst_w = dst.right - dst.left;
     int dst_h = dst.bottom - dst.top;
     float w_dscale = ceilf((float)crop_w / (float)dst_w);
