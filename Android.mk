@@ -1,4 +1,4 @@
-ifeq ($(TARGET_QCOM_AUDIO_VARIANT),)
+ifeq ($(TARGET_QCOM_DISPLAY_VARIANT),)
 ifneq ($(filter msm8084 msm8x84,$(TARGET_BOARD_PLATFORM)),)
     #This is for 8084 based platforms
     include $(call all-named-subdir-makefiles,msm8084)
