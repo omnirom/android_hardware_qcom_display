@@ -66,10 +66,6 @@ bool GenericPipe::setVisualParams(const MetaData_t &metadata)
         return mCtrl->setVisualParams(metadata);
 }
 
-void GenericPipe::setPipeType(const utils::eMdpPipeType& pType) {
-    mCtrl->setPipeType(pType);
-}
-
 bool GenericPipe::commit() {
     return mCtrl->commit();
 }

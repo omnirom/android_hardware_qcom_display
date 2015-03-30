@@ -65,8 +65,6 @@ public:
     void setPosition(const utils::Dim& dim);
     /* set mdp visual params using metadata */
     bool setVisualParams(const MetaData_t &metadata);
-    /* set pipe type RGB/DMA/VG */
-    void setPipeType(const utils::eMdpPipeType& pType);
     /* mdp set overlay/commit changes */
     bool commit();
 
@@ -157,11 +155,6 @@ inline bool Ctrl::setVisualParams(const MetaData_t &metadata)
         return false;
     }
     return true;
-}
-
-inline void Ctrl::setPipeType(const utils::eMdpPipeType& pType)
-{
-    mMdp->setPipeType(pType);
 }
 
 inline void Ctrl::dump() const {
