@@ -148,11 +148,11 @@ int gpu_context_t::gralloc_alloc_buffer(unsigned int size, int usage,
         if(isMacroTileEnabled(format, usage)) {
             flags |= private_handle_t::PRIV_FLAGS_TILE_RENDERED;
         }
-
+#ifdef BOARD_HAS_VENUS_UBWC
         if (isUBwcEnabled(format, usage)) {
             flags |= private_handle_t::PRIV_FLAGS_UBWC_ALIGNED;
         }
-
+#endif
         if(usage & (GRALLOC_USAGE_SW_READ_MASK | GRALLOC_USAGE_SW_WRITE_MASK)) {
             flags |= private_handle_t::PRIV_FLAGS_CPU_RENDERED;
         }
