@@ -17,6 +17,10 @@ LOCAL_PATH := $(call my-dir)
 include $(LOCAL_PATH)/../common.mk
 include $(CLEAR_VARS)
 
+ifeq ($(SONY_AOSP),true)
+$(common_flags) += -DSONY_AOSP
+endif
+
 # gralloc.cpp:87  use of GNU old-style field designator extension.
 LOCAL_CLANG_CFLAGS            += -Wno-gnu-designator
 
