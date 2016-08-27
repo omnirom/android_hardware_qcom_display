@@ -19,14 +19,16 @@ common_libs := liblog libutils libcutils libhardware
 
 #Common C flags
 common_flags := -DDEBUG_CALC_FPS -Wno-missing-field-initializers
-common_flags += -Wconversion -Wall -Werror
+common_flags += -Wconversion -Wall -Werror -Wno-sign-conversion
 
 ifeq ($(ARCH_ARM_HAVE_NEON),true)
     common_flags += -D__ARM_HAVE_NEON
 endif
 
 ifeq ($(call is-board-platform-in-list, $(MSM_VIDC_TARGET_LIST)), true)
+ifneq ($(TARGET_SUPPORTS_WEARABLES), true)
     common_flags += -DVENUS_COLOR_FORMAT
+endif
 endif
 
 ifeq ($(call is-board-platform-in-list, msm8974 msm8226 msm8610 apq8084 \
@@ -34,7 +36,9 @@ ifeq ($(call is-board-platform-in-list, msm8974 msm8226 msm8610 apq8084 \
     common_flags += -DMDSS_TARGET
 endif
 ifeq ($(call is-board-platform-in-list, msm8909), true)
+ifneq ($(TARGET_SUPPORTS_WEARABLES), true)
     common_flags += -DVENUS_COLOR_FORMAT
+endif
     common_flags += -DMDSS_TARGET
 endif
 
@@ -45,7 +49,7 @@ kernel_includes :=
 ifeq ($(TARGET_USES_QCOM_BSP),true)
 # Enable QCOM Display features
     common_flags += -DQTI_BSP
-    common_includes += vendor/qcom/opensource/display-frameworks/include
+    common_includes += $(BOARD_OPENSOURCE_DIR)/display-frameworks/include
 endif
 ifneq ($(call is-platform-sdk-version-at-least,18),true)
     common_flags += -DANDROID_JELLYBEAN_MR1=1
@@ -56,6 +60,8 @@ ifeq ($(call is-vendor-board-platform,QCOM),true)
 # available in the build tree.
 # If the macro is not present, the headers are picked from hardware/qcom/msmXXXX
 # failing which, they are picked from bionic.
-    common_deps += $(TARGET_OUT_INTERMEDIATES)/KERNEL_OBJ/usr
-    kernel_includes += $(TARGET_OUT_INTERMEDIATES)/KERNEL_OBJ/usr/include
+    common_deps += $(BOARD_KERNEL_HEADER_DEPENDENCIES)
+    kernel_includes += $(BOARD_KERNEL_HEADER_DIR)
 endif
+
+common_clang_flags := true

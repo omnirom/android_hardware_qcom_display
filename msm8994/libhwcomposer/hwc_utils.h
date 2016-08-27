@@ -246,11 +246,13 @@ public:
     int getActiveModeIndex() { return mCurModeIndex; }
 private:
     int32_t (*fnGetNumModes)(int /*dispID*/);
+    int32_t (*fnGetCurrentMode)(int /*dispID*/);
     int32_t (*fnGetModeList)(int32_t* /*mModeList*/, int32_t* /*current default*/,
             int32_t /*dispID*/);
     int (*fnApplyDefaultMode)(int /*dispID*/);
     int (*fnApplyModeById)(int /*modeID*/, int /*dispID*/);
     int (*fnSetDefaultMode)(int /*modeID*/, int /*dispID*/);
+    int (*fnDeleteInstance)();
 
     void*     mModeHandle = NULL;
     int32_t   mModeList[MAX_NUM_COLOR_MODES];
