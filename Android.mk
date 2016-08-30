@@ -27,6 +27,5 @@ ifneq ($(TARGET_BOARD_AUTO),true)
     endif
   endif
 endif
-endif
 
 endif
