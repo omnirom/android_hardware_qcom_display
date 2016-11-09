@@ -4,8 +4,12 @@ ifneq ($(filter msm8084 msm8x84,$(TARGET_BOARD_PLATFORM)),)
     include $(call all-named-subdir-makefiles,msm8084)
 else
 ifneq ($(filter msm8974 msm8x74,$(TARGET_BOARD_PLATFORM)),)
-    #This is for 8974 based (and B-family) platforms
-    include $(call all-named-subdir-makefiles,msm8974)
+    ifeq ($(SONY_AOSP),true)
+        include $(call all-named-subdir-makefiles,msm8994)
+    else
+        #This is for 8974 based (and B-family) platforms
+        include $(call all-named-subdir-makefiles,msm8974)
+    endif
 else
 ifneq ($(filter msm8226 msm8x26,$(TARGET_BOARD_PLATFORM)),)
     include $(call all-named-subdir-makefiles,msm8226)
