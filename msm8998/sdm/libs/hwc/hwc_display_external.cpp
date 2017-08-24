@@ -277,12 +277,14 @@ uint32_t HWCDisplayExternal::RoundToStandardFPS(float fps) {
 }
 
 void HWCDisplayExternal::PrepareDynamicRefreshRate(Layer *layer) {
-  if (layer->input_buffer->flags.video) {
+  if (layer->input_buffer.flags.video) {
     if (layer->frame_rate != 0) {
       metadata_refresh_rate_ = SanitizeRefreshRate(layer->frame_rate);
     } else {
       metadata_refresh_rate_ = current_refresh_rate_;
     }
+    layer->frame_rate = current_refresh_rate_;
+  } else if (!layer->frame_rate) {
     layer->frame_rate = current_refresh_rate_;
   }
 }

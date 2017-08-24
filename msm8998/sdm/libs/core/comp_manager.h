@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2014 - 2016, The Linux Foundation. All rights reserved.
+* Copyright (c) 2014 - 2017, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without modification, are permitted
 * provided that the following conditions are met:
@@ -40,7 +40,8 @@ namespace sdm {
 class CompManager : public DumpImpl {
  public:
   DisplayError Init(const HWResourceInfo &hw_res_info_, ExtensionInterface *extension_intf,
-                    BufferAllocator *buffer_allocator, BufferSyncHandler *buffer_sync_handler);
+                    BufferAllocator *buffer_allocator, BufferSyncHandler *buffer_sync_handler,
+                    SocketHandler *socket_handler);
   DisplayError Deinit();
   DisplayError RegisterDisplay(DisplayType type, const HWDisplayAttributes &display_attributes,
                                const HWPanelInfo &hw_panel_info,
@@ -66,17 +67,20 @@ class CompManager : public DumpImpl {
   DisplayError ValidateCursorPosition(Handle display_ctx, HWLayers *hw_layers, int x, int y);
   bool SupportLayerAsCursor(Handle display_ctx, HWLayers *hw_layers);
   bool CanSetIdleTimeout(Handle display_ctx);
+  bool SetDisplayState(Handle display_ctx, DisplayState state, DisplayType display_type);
   DisplayError SetMaxBandwidthMode(HWBwModes mode);
   DisplayError GetScaleLutConfig(HWScaleLutInfo *lut_info);
   DisplayError SetDetailEnhancerData(Handle display_ctx, const DisplayDetailEnhancerData &de_data);
   DisplayError SetCompositionState(Handle display_ctx, LayerComposition composition_type,
                                    bool enable);
+  DisplayError ControlDpps(bool enable);
 
   // DumpImpl method
   virtual void AppendDump(char *buffer, uint32_t length);
 
  private:
   static const int kMaxThermalLevel = 3;
+  static const int kSafeModeThreshold = 4;
 
   void PrepareStrategyConstraints(Handle display_ctx, HWLayers *hw_layers);
 
@@ -88,25 +92,29 @@ class CompManager : public DumpImpl {
     uint32_t max_strategies = 0;
     uint32_t remaining_strategies = 0;
     bool idle_fallback = false;
-    bool fallback_ = false;
+    bool thermal_fallback_ = false;
     // Using primary panel flag of hw panel to configure Constraints. We do not need other hw
     // panel parameters for now.
     bool is_primary_panel = false;
     bool valid_cursor = false;
     PUConstraints pu_constraints = {};
+    bool scaled_composition = false;
   };
 
   Locker locker_;
   ResourceInterface *resource_intf_ = NULL;
   std::bitset<kDisplayMax> registered_displays_;  // Bit mask of registered displays
   std::bitset<kDisplayMax> configured_displays_;  // Bit mask of sucessfully configured displays
+  uint32_t display_state_[kDisplayMax] = {};
   bool safe_mode_ = false;              // Flag to notify all displays to be in resource crunch
                                         // mode, where strategy manager chooses the best strategy
                                         // that uses optimal number of pipes for each display
   HWResourceInfo hw_res_info_;
+  BufferAllocator *buffer_allocator_ = NULL;
   ExtensionInterface *extension_intf_ = NULL;
   uint32_t max_layers_ = kMaxSDELayers;
   uint32_t max_sde_ext_layers_ = 0;
+  DppsControlInterface *dpps_ctrl_intf_ = NULL;
 };
 
 }  // namespace sdm

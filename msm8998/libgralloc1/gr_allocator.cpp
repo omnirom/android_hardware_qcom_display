@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2016, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2017, The Linux Foundation. All rights reserved.
 
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -29,6 +29,7 @@
 
 #include <cutils/log.h>
 #include <algorithm>
+#include <vector>
 
 #include "gr_utils.h"
 #include "gr_allocator.h"
@@ -68,6 +69,9 @@
 #define ION_SC_PREVIEW_FLAGS ION_SECURE
 #endif
 
+using std::vector;
+using std::shared_ptr;
+
 namespace gralloc1 {
 
 Allocator::Allocator() : ion_allocator_(NULL), adreno_helper_(NULL) {
@@ -83,11 +87,6 @@ bool Allocator::Init() {
   if (!adreno_helper_->Init()) {
     return false;
   }
-
-  gpu_support_macrotile = adreno_helper_->IsMacroTilingSupportedByGPU();
-  int supports_macrotile = 0;
-  qdutils::querySDEInfo(qdutils::HAS_MACRO_TILE, &supports_macrotile);
-  display_support_macrotile = !!supports_macrotile;
 
   return true;
 }
@@ -122,43 +121,6 @@ int Allocator::AllocateMem(AllocData *alloc_data, gralloc1_producer_usage_t prod
   return ret;
 }
 
-// Allocates buffer from width, height and format into a
-// private_handle_t. It is the responsibility of the caller
-// to free the buffer using the FreeBuffer function
-int Allocator::AllocateBuffer(const BufferDescriptor &descriptor, private_handle_t **pHnd) {
-  AllocData data;
-  unsigned int aligned_w, aligned_h;
-  data.base = 0;
-  data.fd = -1;
-  data.offset = 0;
-  data.align = (unsigned int)getpagesize();
-  int format = descriptor.GetFormat();
-  gralloc1_producer_usage_t prod_usage = descriptor.GetProducerUsage();
-  gralloc1_consumer_usage_t cons_usage = descriptor.GetConsumerUsage();
-  GetBufferSizeAndDimensions(descriptor, &data.size, &aligned_w, &aligned_h);
-
-  int err = AllocateMem(&data, prod_usage, cons_usage);
-  if (0 != err) {
-    ALOGE("%s: allocate failed", __FUNCTION__);
-    return -ENOMEM;
-  }
-
-  if (IsUBwcEnabled(format, prod_usage, cons_usage)) {
-    data.alloc_type |= private_handle_t::PRIV_FLAGS_UBWC_ALIGNED;
-  }
-
-  // Metadata is not allocated. would be empty
-  private_handle_t *hnd = new private_handle_t(
-      data.fd, data.size, INT(data.alloc_type), 0, INT(format), INT(aligned_w), INT(aligned_h), -1,
-      0, 0, descriptor.GetWidth(), descriptor.GetHeight(), prod_usage, cons_usage);
-  hnd->base = (uint64_t)data.base;
-  hnd->offset = data.offset;
-  hnd->gpuaddr = 0;
-  *pHnd = hnd;
-
-  return 0;
-}
-
 int Allocator::MapBuffer(void **base, unsigned int size, unsigned int offset, int fd) {
   if (ion_allocator_) {
     return ion_allocator_->MapBuffer(base, size, offset, fd);
@@ -167,9 +129,10 @@ int Allocator::MapBuffer(void **base, unsigned int size, unsigned int offset, in
   return -EINVAL;
 }
 
-int Allocator::FreeBuffer(void *base, unsigned int size, unsigned int offset, int fd) {
+int Allocator::FreeBuffer(void *base, unsigned int size, unsigned int offset, int fd,
+                          int handle) {
   if (ion_allocator_) {
-    return ion_allocator_->FreeBuffer(base, size, offset, fd);
+    return ion_allocator_->FreeBuffer(base, size, offset, fd, handle);
   }
 
   return -EINVAL;
@@ -183,8 +146,9 @@ int Allocator::CleanBuffer(void *base, unsigned int size, unsigned int offset, i
   return -EINVAL;
 }
 
-bool Allocator::CheckForBufferSharing(uint32_t num_descriptors, const BufferDescriptor *descriptors,
-                                      int *max_index) {
+bool Allocator::CheckForBufferSharing(uint32_t num_descriptors,
+                                      const vector<shared_ptr<BufferDescriptor>>& descriptors,
+                                      ssize_t *max_index) {
   unsigned int cur_heap_id = 0, prev_heap_id = 0;
   unsigned int cur_alloc_type = 0, prev_alloc_type = 0;
   unsigned int cur_ion_flags = 0, prev_ion_flags = 0;
@@ -195,8 +159,8 @@ bool Allocator::CheckForBufferSharing(uint32_t num_descriptors, const BufferDesc
   *max_index = -1;
   for (uint32_t i = 0; i < num_descriptors; i++) {
     // Check Cached vs non-cached and all the ION flags
-    cur_uncached = UseUncached(descriptors[i].GetProducerUsage());
-    GetIonHeapInfo(descriptors[i].GetProducerUsage(), descriptors[i].GetConsumerUsage(),
+    cur_uncached = UseUncached(descriptors[i]->GetProducerUsage());
+    GetIonHeapInfo(descriptors[i]->GetProducerUsage(), descriptors[i]->GetConsumerUsage(),
                    &cur_heap_id, &cur_alloc_type, &cur_ion_flags);
 
     if (i > 0 && (cur_heap_id != prev_heap_id || cur_alloc_type != prev_alloc_type ||
@@ -205,8 +169,8 @@ bool Allocator::CheckForBufferSharing(uint32_t num_descriptors, const BufferDesc
     }
 
     // For same format type, find the descriptor with bigger size
-    GetAlignedWidthAndHeight(descriptors[i], &alignedw, &alignedh);
-    unsigned int size = GetSize(descriptors[i], alignedw, alignedh);
+    GetAlignedWidthAndHeight(*descriptors[i], &alignedw, &alignedh);
+    unsigned int size = GetSize(*descriptors[i], alignedw, alignedh);
     if (max_size < size) {
       *max_index = INT(i);
       max_size = size;
@@ -219,34 +183,6 @@ bool Allocator::CheckForBufferSharing(uint32_t num_descriptors, const BufferDesc
   }
 
   return true;
-}
-
-bool Allocator::IsMacroTileEnabled(int format, gralloc1_producer_usage_t prod_usage,
-                                   gralloc1_consumer_usage_t cons_usage) {
-  bool tile_enabled = false;
-
-  // Check whether GPU & MDSS supports MacroTiling feature
-  if (!adreno_helper_->IsMacroTilingSupportedByGPU() || !display_support_macrotile) {
-    return tile_enabled;
-  }
-
-  // check the format
-  switch (format) {
-    case HAL_PIXEL_FORMAT_RGBA_8888:
-    case HAL_PIXEL_FORMAT_RGBX_8888:
-    case HAL_PIXEL_FORMAT_BGRA_8888:
-    case HAL_PIXEL_FORMAT_RGB_565:
-    case HAL_PIXEL_FORMAT_BGR_565:
-      if (!CpuCanAccess(prod_usage, cons_usage)) {
-        // not touched by CPU
-        tile_enabled = true;
-      }
-      break;
-    default:
-      break;
-  }
-
-  return tile_enabled;
 }
 
 // helper function
@@ -307,6 +243,9 @@ unsigned int Allocator::GetSize(const BufferDescriptor &descriptor, unsigned int
     case HAL_PIXEL_FORMAT_YCrCb_420_SP:
       size = ALIGN((alignedw * alignedh) + (alignedw * alignedh) / 2 + 1, SIZE_4K);
       break;
+    case HAL_PIXEL_FORMAT_YCbCr_420_P010:
+      size = ALIGN((alignedw * alignedh * 2) + (alignedw * alignedh) + 1, SIZE_4K);
+      break;
     case HAL_PIXEL_FORMAT_YCbCr_422_SP:
     case HAL_PIXEL_FORMAT_YCrCb_422_SP:
     case HAL_PIXEL_FORMAT_YCbCr_422_I:
@@ -355,22 +294,6 @@ void Allocator::GetBufferSizeAndDimensions(const BufferDescriptor &descriptor, u
                                            unsigned int *alignedw, unsigned int *alignedh) {
   GetAlignedWidthAndHeight(descriptor, alignedw, alignedh);
 
-  *size = GetSize(descriptor, *alignedw, *alignedh);
-}
-
-void Allocator::GetBufferAttributes(const BufferDescriptor &descriptor, unsigned int *alignedw,
-                                    unsigned int *alignedh, int *tiled, unsigned int *size) {
-  int format = descriptor.GetFormat();
-  gralloc1_producer_usage_t prod_usage = descriptor.GetProducerUsage();
-  gralloc1_consumer_usage_t cons_usage = descriptor.GetConsumerUsage();
-
-  *tiled = false;
-  if (IsUBwcEnabled(format, prod_usage, cons_usage) ||
-      IsMacroTileEnabled(format, prod_usage, cons_usage)) {
-    *tiled = true;
-  }
-
-  GetAlignedWidthAndHeight(descriptor, alignedw, alignedh);
   *size = GetSize(descriptor, *alignedw, *alignedh);
 }
 
@@ -598,7 +521,7 @@ void Allocator::GetIonHeapInfo(gralloc1_producer_usage_t prod_usage,
                                unsigned int *alloc_type, unsigned int *ion_flags) {
   unsigned int heap_id = 0;
   unsigned int type = 0;
-  int flags = 0;
+  unsigned int flags = 0;
   if (prod_usage & GRALLOC1_PRODUCER_USAGE_PROTECTED) {
     if (cons_usage & GRALLOC1_CONSUMER_USAGE_PRIVATE_SECURE_DISPLAY) {
       heap_id = ION_HEAP(SD_HEAP_ID);
@@ -643,7 +566,7 @@ void Allocator::GetIonHeapInfo(gralloc1_producer_usage_t prod_usage,
   }
 
   *alloc_type = type;
-  *ion_flags = (unsigned int)flags;
+  *ion_flags = flags;
   *ion_heap_id = heap_id;
 
   return;
@@ -817,7 +740,7 @@ void Allocator::GetAlignedWidthAndHeight(const BufferDescriptor &descriptor, uns
 
   // Currently surface padding is only computed for RGB* surfaces.
   bool ubwc_enabled = IsUBwcEnabled(format, prod_usage, cons_usage);
-  int tile = ubwc_enabled || IsMacroTileEnabled(format, prod_usage, cons_usage);
+  int tile = ubwc_enabled;
 
   if (IsUncompressedRGBFormat(format)) {
     adreno_helper_->AlignUnCompressedRGB(width, height, format, tile, alignedw, alignedh);
@@ -852,7 +775,7 @@ void Allocator::GetAlignedWidthAndHeight(const BufferDescriptor &descriptor, uns
       aligned_w = ALIGN(width, 16);
       break;
     case HAL_PIXEL_FORMAT_RAW10:
-      aligned_w = ALIGN(width * 10 / 8, 16);
+      aligned_w = ALIGN(width * 10 / 8, 8);
       break;
     case HAL_PIXEL_FORMAT_YCbCr_420_SP_TILED:
       aligned_w = ALIGN(width, 128);
@@ -862,6 +785,7 @@ void Allocator::GetAlignedWidthAndHeight(const BufferDescriptor &descriptor, uns
     case HAL_PIXEL_FORMAT_YCrCb_422_SP:
     case HAL_PIXEL_FORMAT_YCbCr_422_I:
     case HAL_PIXEL_FORMAT_YCrCb_422_I:
+    case HAL_PIXEL_FORMAT_YCbCr_420_P010:
       aligned_w = ALIGN(width, 16);
       break;
     case HAL_PIXEL_FORMAT_YCbCr_420_SP_VENUS:

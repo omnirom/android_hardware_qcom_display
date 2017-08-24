@@ -5,8 +5,10 @@ ifeq ($(use_hwc2),false)
 
 LOCAL_MODULE                  := hwcomposer.$(TARGET_BOARD_PLATFORM)
 LOCAL_MODULE_RELATIVE_PATH    := hw
+LOCAL_PROPRIETARY_MODULE      := true
 LOCAL_MODULE_TAGS             := optional
 LOCAL_C_INCLUDES              := $(common_includes)
+LOCAL_C_INCLUDES              += frameworks/native/libs/arect/include
 
 LOCAL_CFLAGS                  := -Wno-missing-field-initializers -Wno-unused-parameter \
                                  -std=c++11 -fcolor-diagnostics\
@@ -15,7 +17,7 @@ LOCAL_CLANG                   := true
 
 LOCAL_SHARED_LIBRARIES        := libsdmcore libqservice libbinder libhardware libhardware_legacy \
                                  libutils libcutils libsync libmemalloc libqdutils libdl \
-                                 libpowermanager libsdmutils libc++
+                                 libpowermanager libsdmutils libgpu_tonemapper  libc++ liblog
 
 LOCAL_SRC_FILES               := hwc_session.cpp \
                                  hwc_display.cpp \
@@ -28,7 +30,10 @@ LOCAL_SRC_FILES               := hwc_session.cpp \
                                  hwc_buffer_sync_handler.cpp \
                                  hwc_color_manager.cpp \
                                  blit_engine_c2d.cpp \
-                                 cpuhint.cpp
+                                 cpuhint.cpp \
+                                 hwc_tonemapper.cpp \
+                                 hwc_socket_handler.cpp \
+                                 hwc_display_external_test.cpp
 
 include $(BUILD_SHARED_LIBRARY)
 endif

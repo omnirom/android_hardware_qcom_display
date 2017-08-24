@@ -98,6 +98,7 @@ const char *GetFormatString(const LayerBufferFormat &format) {
   case kFormatYCrCb422H2V1SemiPlanar:   return "Y_CRCB_422_H2V2";
   case kFormatYCbCr420SPVenusUbwc:      return "Y_CBCR_420_VENUS_UBWC";
   case kFormatYCbCr422H2V1Packed:       return "YCBYCR_422_H2V1";
+  case kFormatCbYCrY422H2V1Packed:      return "CBYCRY_422_H2V1";
   case kFormatRGBA1010102:              return "RGBA_1010102";
   case kFormatARGB2101010:              return "ARGB_2101010";
   case kFormatRGBX1010102:              return "RGBX_1010102";
@@ -111,6 +112,15 @@ const char *GetFormatString(const LayerBufferFormat &format) {
   case kFormatYCbCr420P010:             return "Y_CBCR_420_P010";
   case kFormatYCbCr420TP10Ubwc:         return "Y_CBCR_420_TP10_UBWC";
   default:                              return "UNKNOWN";
+  }
+}
+
+BufferLayout GetBufferLayout(LayerBufferFormat format) {
+  switch (format) {
+  case kFormatYCbCr420TP10Ubwc:
+    return kTPTiled;
+  default:
+    return (IsUBWCFormat(format) ? kUBWC : kLinear);
   }
 }
 

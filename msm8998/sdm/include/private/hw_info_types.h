@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2015-2016, The Linux Foundation. All rights reserved.
+* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without modification, are permitted
 * provided that the following conditions are met:
@@ -128,6 +128,8 @@ struct HWRotatorInfo {
   uint32_t num_rotator = 0;
   bool has_downscale = false;
   std::string device_path = "";
+  float min_downscale = 2.0f;
+  bool downscale_compression = false;
 
   void Reset() { *this = HWRotatorInfo(); }
 };
@@ -188,6 +190,7 @@ struct HWResourceInfo {
   HWRotatorInfo hw_rot_info;
   HWDestScalarInfo hw_dest_scalar_info;
   bool has_avr = false;
+  bool has_hdr = false;
 
   void Reset() { *this = HWResourceInfo(); }
 };
@@ -214,6 +217,19 @@ enum HWS3DMode {
   kS3DModeMax,
 };
 
+struct HWColorPrimaries {
+  uint32_t white_point[2] = {};       // White point
+  uint32_t red[2] = {};               // Red color primary
+  uint32_t green[2] = {};             // Green color primary
+  uint32_t blue[2] = {};              // Blue color primary
+};
+
+struct HWPanelOrientation {
+  bool rotation = false;
+  bool flip_horizontal = false;
+  bool flip_vertical = false;
+};
+
 struct HWPanelInfo {
   DisplayPort port = kPortDefault;    // Display port
   HWDisplayMode mode = kModeDefault;  // Display mode
@@ -238,6 +254,12 @@ struct HWPanelInfo {
   int panel_max_brightness = 0;       // Max panel brightness
   uint32_t left_roi_count = 1;        // Number if ROI supported on left panel
   uint32_t right_roi_count = 1;       // Number if ROI supported on right panel
+  bool hdr_enabled = false;           // HDR feature supported
+  uint32_t peak_luminance = 0;        // Panel's peak luminance level
+  uint32_t average_luminance = 0;     // Panel's average luminance level
+  uint32_t blackness_level = 0;       // Panel's blackness level
+  HWColorPrimaries primaries = {};    // WRGB color primaries
+  HWPanelOrientation panel_orientation = {};  // Panel Orientation
 
   bool operator !=(const HWPanelInfo &panel_info) {
     return ((port != panel_info.port) || (mode != panel_info.mode) ||
@@ -429,14 +451,11 @@ struct HWLayersInfo {
   uint32_t app_layer_count = 0;    // Total number of app layers. Must not be 0.
   uint32_t gpu_target_index = 0;   // GPU target layer index. 0 if not present.
 
+  std::vector<Layer> hw_layers = {};  // Layers which need to be programmed on the HW
+
   uint32_t index[kMaxSDELayers];   // Indexes of the layers from the layer stack which need to be
                                    // programmed on hardware.
-  LayerRect updated_src_rect[kMaxSDELayers];  // Updated layer src rects in s3d mode
-  LayerRect updated_dst_rect[kMaxSDELayers];  // Updated layer dst rects in s3d mode
-  bool updating[kMaxSDELayers] = {0};  // Updated by strategy, considering plane_alpha+updating
   uint32_t roi_index[kMaxSDELayers] = {0};  // Stores the ROI index where the layers are visible.
-
-  uint32_t count = 0;              // Total number of layers which need to be set on hardware.
 
   int sync_handle = -1;
 
@@ -464,6 +483,7 @@ struct HWDisplayAttributes : DisplayConfigVariableInfo {
   uint32_t v_back_porch = 0;   //!< Vertical back porch of panel
   uint32_t v_pulse_width = 0;  //!< Vertical pulse width of panel
   uint32_t h_total = 0;        //!< Total width of panel (hActive + hFP + hBP + hPulseWidth)
+  uint32_t v_total = 0;        //!< Total height of panel (vActive + vFP + vBP + vPulseWidth)
   std::bitset<32> s3d_config;  //!< Stores the bit mask of S3D modes
 
   void Reset() { *this = HWDisplayAttributes(); }
@@ -479,6 +499,7 @@ struct HWDisplayAttributes : DisplayConfigVariableInfo {
             (v_front_porch != display_attributes.v_front_porch) ||
             (v_back_porch != display_attributes.v_back_porch) ||
             (v_pulse_width != display_attributes.v_pulse_width) ||
+            (h_total != display_attributes.h_total) ||
             (is_yuv != display_attributes.is_yuv));
   }
 

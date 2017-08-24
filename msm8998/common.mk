@@ -4,8 +4,11 @@ display_top := $(call my-dir)
 #Common C flags
 common_flags := -DDEBUG_CALC_FPS -Wno-missing-field-initializers
 common_flags += -Wconversion -Wall -Werror -std=c++11
+ifneq ($(TARGET_IS_HEADLESS), true)
+    common_flags += -DCOMPILE_DRM
+endif
 
-ifeq ($(call is-board-platform-in-list, msmcobalt msm8998), true)
+ifeq ($(TARGET_USES_COLOR_METADATA), true)
 common_flags += -DUSE_COLOR_METADATA
 endif
 
@@ -17,12 +20,15 @@ endif
 
 common_includes := $(display_top)/libqdutils
 common_includes += $(display_top)/libqservice
+common_includes += $(display_top)/gpu_tonemapper
 ifneq ($(TARGET_IS_HEADLESS), true)
     common_includes += $(display_top)/libcopybit
+    common_includes += $(display_top)/libdrmutils
 endif
 
 common_includes += $(display_top)/include
 common_includes += $(display_top)/sdm/include
+common_includes += system/core/base/include
 
 common_header_export_path := qcom/display
 
@@ -39,6 +45,7 @@ ifneq ($(TARGET_USES_GRALLOC1), true)
     common_flags += -isystem $(display_top)/libgralloc
 else
     common_flags += -isystem $(display_top)/libgralloc1
+    common_flags += -DUSE_GRALLOC1
 endif
 
 ifeq ($(TARGET_USES_POST_PROCESSING),true)
@@ -48,10 +55,6 @@ endif
 
 ifeq ($(ARCH_ARM_HAVE_NEON),true)
     common_flags += -D__ARM_HAVE_NEON
-endif
-
-ifeq ($(call is-board-platform-in-list, $(MSM_VIDC_TARGET_LIST)), true)
-    common_flags += -DVENUS_COLOR_FORMAT
 endif
 
 ifeq ($(call is-board-platform-in-list, $(MASTER_SIDE_CP_TARGET_LIST)), true)

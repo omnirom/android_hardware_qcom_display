@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2014 - 2016, The Linux Foundation. All rights reserved.
+* Copyright (c) 2014 - 2017, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without modification, are permitted
 * provided that the following conditions are met:
@@ -32,29 +32,32 @@
 
 namespace sdm {
 
-Strategy::Strategy(ExtensionInterface *extension_intf, DisplayType type,
+Strategy::Strategy(ExtensionInterface *extension_intf, BufferAllocator *buffer_allocator,
+                   DisplayType type,
                    const HWResourceInfo &hw_resource_info, const HWPanelInfo &hw_panel_info,
                    const HWMixerAttributes &mixer_attributes,
                    const HWDisplayAttributes &display_attributes,
                    const DisplayConfigVariableInfo &fb_config)
   : extension_intf_(extension_intf), display_type_(type), hw_resource_info_(hw_resource_info),
     hw_panel_info_(hw_panel_info), mixer_attributes_(mixer_attributes),
-    display_attributes_(display_attributes), fb_config_(fb_config) {
+    display_attributes_(display_attributes), fb_config_(fb_config),
+    buffer_allocator_(buffer_allocator) {
 }
 
 DisplayError Strategy::Init() {
   DisplayError error = kErrorNone;
 
   if (extension_intf_) {
-    error = extension_intf_->CreateStrategyExtn(display_type_, hw_resource_info_, hw_panel_info_,
-                                                mixer_attributes_, fb_config_, &strategy_intf_);
+    error = extension_intf_->CreateStrategyExtn(display_type_, buffer_allocator_, hw_resource_info_,
+                                                hw_panel_info_, mixer_attributes_, fb_config_,
+                                                &strategy_intf_);
     if (error != kErrorNone) {
       DLOGE("Failed to create strategy");
       return error;
     }
 
     error = extension_intf_->CreatePartialUpdate(display_type_, hw_resource_info_, hw_panel_info_,
-                                                 mixer_attributes_, display_attributes_,
+                                                 mixer_attributes_, display_attributes_, fb_config_,
                                                  &partial_update_intf_);
   }
 
@@ -137,14 +140,13 @@ DisplayError Strategy::GetNextStrategy(StrategyConstraints *constraints) {
   LayerStack *layer_stack = hw_layers_info_->stack;
   for (uint32_t i = 0; i < hw_layers_info_->app_layer_count; i++) {
     layer_stack->layers.at(i)->composition = kCompositionGPU;
+    layer_stack->layers.at(i)->request.flags.request_flags = 0;  // Reset layer request
   }
 
   if (!extn_start_success_) {
     // When mixer resolution and panel resolutions are same (1600x2560) and FB resolution is
     // 1080x1920 FB_Target destination coordinates(mapped to FB resolution 1080x1920) need to
     // be mapped to destination coordinates of mixer resolution(1600x2560).
-    hw_layers_info_->count = 0;
-    uint32_t &hw_layer_count = hw_layers_info_->count;
     Layer *gpu_target_layer = layer_stack->layers.at(hw_layers_info_->gpu_target_index);
     float layer_mixer_width = FLOAT(mixer_attributes_.width);
     float layer_mixer_height = FLOAT(mixer_attributes_.height);
@@ -153,11 +155,11 @@ DisplayError Strategy::GetNextStrategy(StrategyConstraints *constraints) {
     LayerRect src_domain = (LayerRect){0.0f, 0.0f, fb_width, fb_height};
     LayerRect dst_domain = (LayerRect){0.0f, 0.0f, layer_mixer_width, layer_mixer_height};
 
-    hw_layers_info_->updated_src_rect[hw_layer_count] = gpu_target_layer->src_rect;
-    MapRect(src_domain, dst_domain, gpu_target_layer->dst_rect,
-            &hw_layers_info_->updated_dst_rect[hw_layer_count]);
-
-    hw_layers_info_->index[hw_layer_count++] = hw_layers_info_->gpu_target_index;
+    Layer layer = *gpu_target_layer;
+    hw_layers_info_->index[0] = hw_layers_info_->gpu_target_index;
+    MapRect(src_domain, dst_domain, layer.dst_rect, &layer.dst_rect);
+    hw_layers_info_->hw_layers.clear();
+    hw_layers_info_->hw_layers.push_back(layer);
   }
 
   tried_default_ = true;
@@ -175,9 +177,7 @@ void Strategy::GenerateROI() {
   float layer_mixer_width = mixer_attributes_.width;
   float layer_mixer_height = mixer_attributes_.height;
 
-  if (!hw_resource_info_.is_src_split &&
-     ((layer_mixer_width > hw_resource_info_.max_mixer_width) ||
-     ((hw_panel_info_.is_primary_panel) && hw_panel_info_.split_info.right_split))) {
+  if (!hw_resource_info_.is_src_split && display_attributes_.is_device_split) {
     split_display = true;
   }
 
@@ -215,7 +215,7 @@ DisplayError Strategy::Reconfigure(const HWPanelInfo &hw_panel_info,
   }
 
   extension_intf_->CreatePartialUpdate(display_type_, hw_resource_info_, hw_panel_info,
-                                       mixer_attributes, display_attributes,
+                                       mixer_attributes, display_attributes, fb_config,
                                        &partial_update_intf_);
 
   error = strategy_intf_->Reconfigure(hw_panel_info, hw_resource_info_, mixer_attributes,
@@ -245,5 +245,14 @@ DisplayError Strategy::SetCompositionState(LayerComposition composition_type, bo
 
   return kErrorNone;
 }
+
+DisplayError Strategy::Purge() {
+  if (strategy_intf_) {
+    return strategy_intf_->Purge();
+  }
+
+  return kErrorNone;
+}
+
 
 }  // namespace sdm

@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2008 The Android Open Source Project
- * Copyright (c) 2011 - 2016, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011 - 2017, The Linux Foundation. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -118,6 +118,8 @@
 #define HAL_PIXEL_FORMAT_BGRX_1010102            0x11C
 #define HAL_PIXEL_FORMAT_XBGR_2101010            0x11D
 #define HAL_PIXEL_FORMAT_YCbCr_420_P010          0x11F
+#define HAL_PIXEL_FORMAT_CbYCrY_422_I            0x120
+#define HAL_PIXEL_FORMAT_BGR_888                 0x121
 
 #define HAL_PIXEL_FORMAT_INTERLACE               0x180
 
@@ -245,6 +247,8 @@ struct private_handle_t : public native_handle {
         uint64_t base_metadata __attribute__((aligned(8)));
         int unaligned_width;   // holds width client asked to allocate
         int unaligned_height;  // holds height client asked to allocate
+        unsigned int gem_handle;
+        unsigned int fb_id;
 
 #ifdef __cplusplus
         static const int sNumFds = 2;
@@ -261,7 +265,7 @@ struct private_handle_t : public native_handle {
             base(0), offset_metadata(0), gpuaddr(0),
             format(format), width(width), height(height),
             base_metadata(0), unaligned_width(width),
-            unaligned_height(height)
+            unaligned_height(height), gem_handle(0), fb_id(0)
         {
             version = (int) sizeof(native_handle);
             numInts = sNumInts();

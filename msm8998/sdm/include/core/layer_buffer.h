@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2014, 2016, The Linux Foundation. All rights reserved.
+* Copyright (c) 2014, 2016-2017, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without modification, are permitted
 * provided that the following conditions are met:
@@ -30,20 +30,11 @@
 #define __LAYER_BUFFER_H__
 
 #include <stdint.h>
+#include <color_metadata.h>
 
 #include "sdm_types.h"
 
 namespace sdm {
-
-/*! @brief This enum represents display layer color space conversion (CSC) matrix types.
-
-  @sa Layer
-*/
-enum LayerCSC {
-  kCSCLimitedRange601,    //!< 601 limited range color space.
-  kCSCFullRange601,       //!< 601 full range color space.
-  kCSCLimitedRange709,    //!< 709 limited range color space.
-};
 
 /*! @brief This enum represents display layer inverse gamma correction (IGC) types.
 
@@ -158,6 +149,7 @@ enum LayerBufferFormat {
                                       //!<    y(0), u(0), y(1), v(0), y(2), u(2), y(3), v(2)
                                       //!<    y(n-1), u(n-1), y(n), v(n-1)
 
+  kFormatCbYCrY422H2V1Packed,
   kFormatInvalid = 0xFFFFFFFF,
 };
 
@@ -212,6 +204,9 @@ struct LayerBufferFlags {
       uint32_t secure_camera : 1;   //!< This flag shall be set by the client to indicate that the
                                     //!< buffer is associated with secure camera session. A secure
                                     //!< camera layer can co-exist with non-secure layer(s).
+
+      uint32_t hdr : 1;             //!< This flag shall be set by the client to indicate that the
+                                    //!< the content is HDR.
     };
 
     uint32_t flags = 0;             //!< For initialization purpose only.
@@ -234,7 +229,7 @@ struct LayerBuffer {
                                 //!< Unaligned height of the Layer that this buffer is for.
   uint32_t size = 0;            //!< Size of a single buffer (even if multiple clubbed together)
   LayerBufferFormat format = kFormatRGBA8888;     //!< Format of the buffer content.
-  LayerCSC csc = kCSCFullRange601;                //!< Color Space of the layer.
+  ColorMetaData color_metadata = {};              //!< CSC + Range + Transfer + Matrix + HDR Info
   LayerIGC igc = kIGCNotSpecified;                //!< IGC that will be applied on this layer.
   LayerBufferPlane planes[4] = {};
                                 //!< Array of planes that this buffer contains. RGB buffer formats
@@ -271,6 +266,14 @@ struct LayerBuffer {
                                 //!< could be modified by both client and SDM.
   uint64_t buffer_id __attribute__((aligned(8))) = 0;
                                 //!< Specifies the buffer id.
+  uint32_t fb_id = 0;  // DRM f/w registered framebuffer id
+};
+
+// This enum represents buffer layout types.
+enum BufferLayout {
+  kLinear,    //!< Linear data
+  kUBWC,      //!< UBWC aligned data
+  kTPTiled    //!< Tightly Packed data
 };
 
 }  // namespace sdm
