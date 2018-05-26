@@ -95,12 +95,13 @@ void HWVirtualDRM::InitializeConfigs() {
   current_mode_.clock = (current_mode_.htotal * current_mode_.vtotal \
   * current_mode_.vrefresh) / 1000;
   struct sde_drm_wb_cfg wb_cfg;
+  int ret = 0;
   wb_cfg.connector_id = token_.conn_id;
   wb_cfg.flags |= SDE_DRM_WB_CFG_FLAGS_CONNECTED;
   wb_cfg.count_modes = 1;
   wb_cfg.modes = (uint64_t)&current_mode_;
   #ifdef DRM_IOCTL_SDE_WB_CONFIG
-  int ret = drmIoctl(dev_fd_, DRM_IOCTL_SDE_WB_CONFIG, &wb_cfg);
+  ret = drmIoctl(dev_fd_, DRM_IOCTL_SDE_WB_CONFIG, &wb_cfg);
   #endif
   if (ret) {
     DLOGE("WB config failed\n");
