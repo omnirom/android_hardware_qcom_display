@@ -220,10 +220,25 @@ void HWCSession::GetCapabilities(struct hwc2_device *device, uint32_t *outCount,
   bool skip_validate = !Debug::IsSkipValidateDisabled();
   uint32_t count = 1 + (skip_validate ? 1 : 0);
 
+  // skip client color transform is enabled by default
+  int skip_client_color_transform = 1;
+  int skip_validate_index = 1;
+  char property[PROPERTY_VALUE_MAX];
+
   if (outCapabilities != nullptr && (*outCount >= count)) {
-    outCapabilities[0] = HWC2_CAPABILITY_SKIP_CLIENT_COLOR_TRANSFORM;
+
+    if (property_get("persist.hwc2.skip_client_color_transform", property, "1") > 0) {
+      skip_client_color_transform = atoi(property);
+    }
+    if(skip_client_color_transform) {
+      outCapabilities[0] = HWC2_CAPABILITY_SKIP_CLIENT_COLOR_TRANSFORM;
+    } else {
+      // change index of skip validate flag in case skip color transform flag was not set
+      skip_validate_index = 0;
+    }
+
     if (skip_validate) {
-      outCapabilities[1] = HWC2_CAPABILITY_SKIP_VALIDATE;
+      outCapabilities[skip_validate_index] = HWC2_CAPABILITY_SKIP_VALIDATE;
     }
   }
   *outCount = count;
