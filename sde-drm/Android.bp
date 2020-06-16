@@ -1,6 +1,7 @@
 cc_library_shared {
 
     name: "libsdedrm",
+    defaults: ["qtidisplay_defaults"],
     sanitize: {
         integer_overflow: true,
     },
@@ -21,13 +22,7 @@ cc_library_shared {
         "-fno-operator-names",
         "-Wno-unused-parameter",
         "-DLOG_TAG=\"SDE_DRM\"",
-    ] + select(soong_config_variable("qtidisplay", "drmpp"), {
-        "true": ["-DPP_DRM_ENABLE"],
-        default: [],
-    }) + select(soong_config_variable("qtidisplay", "llvmsa"), {
-        "true": ["--compile-and-analyze", "--analyzer-perf"],
-        default: [],
-    }),
+    ],
     srcs: [
         "drm_manager.cpp",
         "drm_connector.cpp",
@@ -39,7 +34,6 @@ cc_library_shared {
         "drm_pp_manager.cpp",
         "drm_property.cpp",
         "drm_dpps_mgr_imp.cpp",
-        "drm_panel_feature_mgr.cpp",
     ],
 
     vendor: true,

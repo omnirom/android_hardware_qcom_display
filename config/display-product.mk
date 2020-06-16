@@ -18,6 +18,14 @@ PRODUCT_PACKAGES += \
 DISPLAY_HAL_DIR := hardware/qcom-caf/sm8250/display
 
 ifneq ($(TARGET_HAS_LOW_RAM),true)
+    ifeq ($(TARGET_BOARD_PLATFORM)$(TARGET_BOARD_SUFFIX),bengal_32)
+        PRODUCT_PACKAGES += vendor.qti.hardware.display.composer-service-32bit.xml
+    endif
+else
+    PRODUCT_PACKAGES += vendor.qti.hardware.display.composer-service-low-ram.xml
+endif
+
+ifneq ($(TARGET_HAS_LOW_RAM),true)
 #QDCM calibration xml file for 2k panel
 PRODUCT_COPY_FILES += $(DISPLAY_HAL_DIR)/config/qdcm_calib_data_nt35597_cmd_mode_dsi_truly_panel_with_DSC.xml:$(TARGET_COPY_OUT_VENDOR)/etc/qdcm_calib_data_nt35597_cmd_mode_dsi_truly_panel_with_DSC.xml
 PRODUCT_COPY_FILES += $(DISPLAY_HAL_DIR)/config/qdcm_calib_data_nt35597_cmd_mode_dsi_truly_panel_with_DSC.xml:$(TARGET_COPY_OUT_VENDOR)/etc/qdcm_calib_data_nt35597_video_mode_dsi_truly_panel_with_DSC.xml
@@ -136,14 +144,19 @@ endif
 
 QMAA_ENABLED_HAL_MODULES += display
 ifeq ($(TARGET_USES_QMAA),true)
-ifeq ($(TARGET_USES_QMAA_OVERRIDE_DISPLAY),true)
-PRODUCT_PROPERTY_OVERRIDES += \
-    vendor.display.enable_null_display=0
-else
-TARGET_IS_HEADLESS := true
-PRODUCT_PROPERTY_OVERRIDES += \
-    vendor.display.enable_null_display=1
-endif
+    ifeq ($(TARGET_USES_QMAA_OVERRIDE_DISPLAY),true)
+        PRODUCT_PROPERTY_OVERRIDES += \
+            vendor.display.enable_null_display=0
+        #Modules that shouldn't be enabled in QMAA go here
+        PRODUCT_PACKAGES += libdrmutils
+        PRODUCT_PACKAGES += libsdedrm
+        PRODUCT_PACKAGES += libgpu_tonemapper
+    else
+    TARGET_IS_HEADLESS := true
+    SOONG_CONFIG_qtidisplay_headless := true
+    PRODUCT_PROPERTY_OVERRIDES += \
+        vendor.display.enable_null_display=1
+    endif
 endif
 
 # Properties using default value:
