@@ -1225,7 +1225,7 @@ DisplayError HWDeviceDRM::PowerOff(bool teardown, SyncPoints *sync_points) {
   shared_ptr<Fence> retire_fence = Fence::Create(INT(retire_fence_fd), "retire_power_off");
   if (ret) {
     DLOGE("Failed with error: %d, dynamic_fps=%d, seamless_mode_switch_=%d, vrefresh_=%d,"
-     "panel_mode_changed_=%d bit_clk_rate_=%d", ret, hw_panel_info_.dynamic_fps,
+     "panel_mode_changed_=%d bit_clk_rate_=%lu", ret, hw_panel_info_.dynamic_fps,
      seamless_mode_switch_, vrefresh_, panel_mode_changed_, bit_clk_rate_);
     return kErrorHardware;
   }

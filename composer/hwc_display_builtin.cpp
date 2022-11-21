@@ -1407,7 +1407,7 @@ HWC2::Error HWCDisplayBuiltIn::PostCommitLayerStack(shared_ptr<Fence> *out_retir
       cwb_state_.teardown_frame_retire_fence = layer_stack_.retire_fence;
       cwb_state_.cwb_disp_id = -1;
       cwb_state_.cwb_status = CWBStatus::kCWBPostTeardown;
-      DLOGV_IF(kTagClient, "CWB display id = %d , cwb status = %d", cwb_state_.cwb_disp_id,
+      DLOGV_IF(kTagClient, "CWB display id = %lu , cwb status = %d", cwb_state_.cwb_disp_id,
                cwb_state_.cwb_status);
     }
   }  // releasing the cwb state lock

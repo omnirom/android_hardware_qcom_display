@@ -2455,8 +2455,8 @@ void DisplayIPCVmCallbackImpl::ExportHFCBuffer() {
   hfc_buf.panel_id = panel_id_;
   export_buf_in_params->buffers.emplace(kIpcBufferTypeDemuraHFC, hfc_buf);
 
-  DLOGI("Allocated hfc buffer fd %d size %d panel id :%x", hfc_buf.fd, hfc_buf.size,
-    hfc_buf);
+  DLOGI("Allocated hfc buffer fd %d size %d panel id :%lx", hfc_buf.fd, hfc_buf.size,
+    hfc_buf.panel_id);
 
   GenericPayload out;
   IPCExportBufOutParams *export_buf_out_params = nullptr;
