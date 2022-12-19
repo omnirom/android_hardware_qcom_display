@@ -4,6 +4,7 @@ cc_library_shared {
     cflags: [
         "-Wno-sign-conversion",
         "-Wno-unused-parameter",
+        "-Wno-format",
         "-DLOG_TAG=\"libdisplayconfigqti\"",
     ],
     shared_libs: [

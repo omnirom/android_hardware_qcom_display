@@ -24,6 +24,7 @@ cc_library_shared {
         "-DLOG_TAG=\"qdgralloc\"",
         "-D__QTI_DISPLAY_GRALLOC__",
         "-Wno-sign-conversion",
+        "-Wno-format",
         "-Wno-unused-parameter",
         "-Wno-unused-variable",
     ],

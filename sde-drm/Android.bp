@@ -18,6 +18,7 @@ cc_library_shared {
     cflags: [
         "-Wno-missing-field-initializers",
         "-Wall",
+        "-Wno-format",
         "-Werror",
         "-fno-operator-names",
         "-Wno-unused-parameter",

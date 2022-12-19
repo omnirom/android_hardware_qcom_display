@@ -3,6 +3,7 @@ cc_library_shared {
     vendor: true,
     cflags: [
         "-Wno-sign-conversion",
+        "-Wno-format",
         "-DLOG_TAG=\"qdmetadata\"",
         "-D__QTI_DISPLAY_GRALLOC__",
     ],
