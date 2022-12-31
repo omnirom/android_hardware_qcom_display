@@ -367,10 +367,10 @@ void HWCSession::InitSupportedDisplaySlots() {
   }
 
   HWDisplayInterfaceInfo hw_disp_info = {};
-  error = core_intf_->GetFirstDisplayInterfaceType(&hw_disp_info);
+  error = WaitForPrimaryHotplug(&hw_disp_info);
   if (error != kErrorNone) {
     CoreInterface::DestroyCore();
-    DLOGE("Primary display type not recognized. Error = %d", error);
+    DLOGE("Primary display is not plugged. Error = %d", error);
     return;
   }
 
@@ -2989,6 +2989,8 @@ int HWCSession::HandlePluggableDisplays(bool delay_hotplug) {
     return -EINVAL;
   }
 
+  HandlePluggablePrimaryDisplay(&hw_displays_info);
+
   int status = HandleDisconnectedDisplays(&hw_displays_info);
   if (status) {
     DLOGE("All displays could not be disconnected.");
@@ -3964,7 +3966,15 @@ int HWCSession::WaitForResources(bool wait_for_resources, hwc2_display_t active_
       {
         std::unique_lock<std::mutex> caller_lock(hotplug_mutex_);
         resource_ready_ = false;
-        hotplug_cv_.wait(caller_lock);
+        if (hotplug_cv_.wait_for(caller_lock, std::chrono::seconds(5))
+            == std::cv_status::timeout) {
+          if (!client_connected_) {
+            DLOGW("Client is not connected!");
+            break;
+          } else {
+            continue;
+          }
+        }
         if (active_display_id_ == active_builtin_id && needs_active_builtin_reconfig &&
             cached_retire_fence_) {
           Fence::Wait(cached_retire_fence_);
@@ -4012,12 +4022,23 @@ int32_t HWCSession::SetActiveConfigWithConstraints(
 
 int HWCSession::WaitForCommitDoneAsync(hwc2_display_t display, int client_id) {
   std::chrono::milliseconds span(5000);
-  commit_done_future_ = std::async([](HWCSession* session, hwc2_display_t display, int client_id) {
-                                      return session->WaitForCommitDone(display, client_id);
-                                     }, this, display, client_id);
-  auto ret = (commit_done_future_.wait_for(span) == std::future_status::timeout) ?
-             -EINVAL : commit_done_future_.get();
-  return ret;
+  if (commit_done_future_[display].valid()) {
+    std::future_status status = commit_done_future_[display].wait_for(std::chrono::milliseconds(0));
+    if (status != std::future_status::ready) {
+      // Previous task is stuck. Bail out early.
+      return -ETIMEDOUT;
+    }
+  }
+
+  commit_done_future_[display] =
+      std::async([](HWCSession* session, hwc2_display_t display, int client_id) {
+                      return session->WaitForCommitDone(display, client_id);
+                    }, this, display, client_id);
+  if (commit_done_future_[display].wait_for(span) == std::future_status::timeout) {
+    DLOGW("WaitForCommitDoneAsync timed out");
+    return -ETIMEDOUT;
+  }
+  return commit_done_future_[display].get();
 }
 
 int HWCSession::WaitForCommitDone(hwc2_display_t display, int client_id) {
@@ -4153,7 +4174,9 @@ android::status_t HWCSession::TUITransitionStart(int disp_id) {
 
   int ret = WaitForCommitDoneAsync(target_display, kClientTrustedUI);
   if (ret != 0) {
-    DLOGE("WaitForCommitDone failed with error = %d", ret);
+    if (ret != -ETIMEDOUT) {
+      DLOGE("WaitForCommitDone failed with error = %d", ret);
+    }
     return -EINVAL;
   }
 
@@ -4241,7 +4264,10 @@ android::status_t HWCSession::TUITransitionEnd(int disp_id) {
     DLOGI("Waiting for device unassign");
     int ret = WaitForCommitDoneAsync(target_display, kClientTrustedUI);
     if (ret != 0) {
-      DLOGE("Device unassign failed with error %d", ret);
+      if (ret != -ETIMEDOUT) {
+        DLOGE("Device unassign failed with error %d", ret);
+      }
+      TUITransitionUnPrepare(disp_id);
       tui_start_success_ = false;
       return -EINVAL;
     }
@@ -4300,9 +4326,12 @@ android::status_t HWCSession::TUITransitionUnPrepare(int disp_id) {
   }
   if (trigger_refresh) {
     for (int i = 0; i < 2; i++) {
-      int ret = WaitForCommitDone(target_display, kClientTrustedUI);
+      int ret = WaitForCommitDoneAsync(target_display, kClientTrustedUI);
       if (ret != 0) {
-        DLOGE("WaitForCommitDone failed with error %d", ret);
+        if (ret != -ETIMEDOUT) {
+          DLOGE("WaitForCommitDone failed with error %d", ret);
+        }
+        tui_start_success_ = false;
         return -EINVAL;
       }
     }
@@ -4463,6 +4492,43 @@ void HWCSession::NotifyDisplayAttributes(hwc2_display_t display, hwc2_config_t c
     attributes.panelType = DisplayPortType::DEFAULT;
     attributes.isYuv = var_info.is_yuv;
     NotifyResolutionChange(display, attributes);
+  }
+}
+
+DisplayError HWCSession::WaitForPrimaryHotplug(HWDisplayInterfaceInfo *hw_disp_info) {
+  int wait_for_hotplug = 0;  // Default value when property is not present.
+  HWCDebugHandler::Get()->GetProperty(WAIT_FOR_PRIMARY_DISPLAY, &wait_for_hotplug);
+  DLOGI("wait_for_primary_display :%d", wait_for_hotplug);
+
+  const uint32_t kMaxAttempts = wait_for_hotplug ? 60 : 1;
+  uint32_t attempts;
+  for (attempts = 0; attempts < kMaxAttempts; attempts++) {
+    DisplayError error = core_intf_->GetFirstDisplayInterfaceType(hw_disp_info);
+    if (error != kErrorNone) {
+      return error;
+    }
+    if (hw_disp_info->is_connected) {
+      DLOGI("Primary display of type-%d is connected after %u %s",
+            hw_disp_info->type, (attempts + 1), attempts ? "attempts" : "attempt");
+      break;
+    }
+    usleep(1000000);    // sleep for 1 second
+  }
+
+  if (attempts == kMaxAttempts) {
+    LOG_ALWAYS_FATAL("Primary display of type-%d is not yet connected after %u %s",
+                     hw_disp_info->type, kMaxAttempts, kMaxAttempts == 1 ? "attempt" : "attempts");
+  }
+
+  return kErrorNone;
+}
+
+void HWCSession::HandlePluggablePrimaryDisplay(HWDisplaysInfo *hw_displays_info) {
+  for (auto &iter : *hw_displays_info) {
+    auto &info = iter.second;
+    if (info.is_primary && (info.display_type == kPluggable) && !info.is_connected) {
+      LOG_ALWAYS_FATAL("Primary pluggable display is disconnected");
+    }
   }
 }
 }  // namespace sdm

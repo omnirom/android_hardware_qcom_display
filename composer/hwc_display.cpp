@@ -54,6 +54,7 @@
 */
 
 #include <cutils/properties.h>
+#include <utils/ProcessCallStack.h>
 #include <errno.h>
 #include <math.h>
 #include <sync/sync.h>
@@ -1538,6 +1539,9 @@ DisplayError HWCDisplay::HandleEvent(DisplayEvent event) {
     } break;
     case kIdleTimeout:
       ReqPerfHintRelease();
+      break;
+    case kDumpStacktrace:
+      DumpStacktrace();
       break;
     default:
       DLOGW("Unknown event: %d", event);
@@ -3165,6 +3169,10 @@ DisplayError HWCDisplay::HandleSecureEvent(SecureEvent secure_event, bool *needs
   if (secure_event == kTUITransitionEnd || secure_event == kTUITransitionUnPrepare) {
     DLOGI("Resume display %d-%d",  sdm_id_, type_);
     display_paused_ = false;
+    if (*needs_refresh == false) {
+      secure_event_ = kSecureEventMax;
+      return kErrorNone;
+    }
   } else if (secure_event == kTUITransitionPrepare || secure_event == kTUITransitionStart) {
     if (*needs_refresh) {
       display_pause_pending_ = true;
@@ -3575,6 +3583,12 @@ DisplayError HWCDisplay::NotifyFpsMitigation(const float fps,
                                              bool concurrency_begin) {
   event_handler_->NotifyConcurrencyFps(fps, concurrency, concurrency_begin);
   return kErrorNone;
+}
+
+void HWCDisplay::DumpStacktrace() {
+  android::ProcessCallStack stack = {};
+  stack.update();
+  stack.log("ProcessCallstack_Composer");
 }
 
 void HWCDisplay::MarkClientActive(bool is_client_up) {

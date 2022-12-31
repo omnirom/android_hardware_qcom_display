@@ -578,6 +578,8 @@ class HWCSession : hwc2_device_t, HWCUEventListener, public qClient::BnQClient,
   bool HasHDRSupport(HWCDisplay *hwc_display);
   void PostInit();
   int GetDispTypeFromPhysicalId(uint64_t physical_disp_id, DispType *disp_type);
+  DisplayError WaitForPrimaryHotplug(HWDisplayInterfaceInfo *hw_disp_info);
+  void HandlePluggablePrimaryDisplay(HWDisplaysInfo *hw_displays_info);
 
   // Uevent handler
   virtual void UEventHandler(const char *uevent_data, int length);
@@ -709,7 +711,7 @@ class HWCSession : hwc2_device_t, HWCUEventListener, public qClient::BnQClient,
   bool disable_non_wfd_vds_ = false;
   bool debug_enable_hwc_vds_ = false;
   bool tui_start_success_ = false;
-  std::future<int> commit_done_future_;
+  std::map <hwc2_display_t, std::future<int>> commit_done_future_;
 };
 }  // namespace sdm
 
