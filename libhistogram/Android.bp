@@ -38,7 +38,6 @@ cc_library_shared {
         "-fno-operator-names",
         "-Wthread-safety",
     ],
-    clang: true,
     srcs: [
         "histogram_collector.cpp",
         "ringbuffer.cpp",
@@ -71,7 +70,6 @@ cc_binary {
         "-fno-operator-names",
         "-Wthread-safety",
     ],
-    clang: true,
 
     vendor: true,
 
@@ -106,7 +104,6 @@ cc_binary {
         "-fno-operator-names",
         "-Wthread-safety",
     ],
-    clang: true,
 
     vendor: true,
 
