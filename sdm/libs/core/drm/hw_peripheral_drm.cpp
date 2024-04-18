@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are
@@ -27,6 +27,42 @@ OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+/*
+* Changes from Qualcomm Innovation Center are provided under the following license:
+*
+* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+*
+* Redistribution and use in source and binary forms, with or without
+* modification, are permitted (subject to the limitations in the
+* disclaimer below) provided that the following conditions are met:
+*
+*    * Redistributions of source code must retain the above copyright
+*      notice, this list of conditions and the following disclaimer.
+*
+*    * Redistributions in binary form must reproduce the above
+*      copyright notice, this list of conditions and the following
+*      disclaimer in the documentation and/or other materials provided
+*      with the distribution.
+*
+*    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+*      contributors may be used to endorse or promote products derived
+*      from this software without specific prior written permission.
+*
+* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*/
+
 #include <fcntl.h>
 #include <utils/debug.h>
 #include <utils/sys.h>
@@ -44,6 +80,8 @@ using sde_drm::DRMOps;
 using sde_drm::DRMPowerMode;
 using sde_drm::DppsFeaturePayload;
 using sde_drm::DRMDppsFeatureInfo;
+using sde_drm::DRMPanelFeatureID;
+using sde_drm::DRMPanelFeatureInfo;
 using sde_drm::DRMSecureMode;
 using sde_drm::DRMCWbCaptureMode;
 
@@ -67,6 +105,7 @@ DisplayError HWPeripheralDRM::Init() {
   InitDestScaler();
 
   PopulateBitClkRates();
+  CreatePanelFeaturePropertyMap();
 
   return kErrorNone;
 }
@@ -526,7 +565,7 @@ DisplayError HWPeripheralDRM::PowerOn(const HWQosData &qos_data,
     return kErrorUndefined;
   }
 
-  if (first_cycle_) {
+  if (first_cycle_ || delay_first_commit_) {
     return kErrorDeferred;
   }
 
@@ -563,6 +602,10 @@ DisplayError HWPeripheralDRM::PowerOn(const HWQosData &qos_data,
 
 DisplayError HWPeripheralDRM::PowerOff(bool teardown) {
   DTRACE_SCOPED();
+
+  if (delay_first_commit_) {
+    delay_first_commit_ = false;
+  }
 
   DisplayError err = HWDeviceDRM::PowerOff(teardown);
   if (err != kErrorNone) {
@@ -805,4 +848,88 @@ DisplayError HWPeripheralDRM::GetPanelBrightnessBasePath(std::string *base_path)
   return kErrorNone;
 }
 
+void HWPeripheralDRM::CreatePanelFeaturePropertyMap() {
+  panel_feature_property_map_.clear();
+
+  panel_feature_property_map_[kPanelFeatureDsppRCInfo] = sde_drm::kDRMPanelFeatureDsppRCInfo;
+  panel_feature_property_map_[kPanelFeatureRCInitCfg] = sde_drm::kDRMPanelFeatureRCInit;
+}
+int HWPeripheralDRM::GetPanelFeature(PanelFeaturePropertyInfo *feature_info) {
+  int ret = 0;
+  DRMPanelFeatureInfo drm_feature = {};
+
+  if (!feature_info) {
+    DLOGE("Invalid object pointer of PanelFeaturePropertyInfo");
+    return -EINVAL;
+  }
+
+  auto it = panel_feature_property_map_.find(feature_info->prop_id);
+  if (it ==  panel_feature_property_map_.end()) {
+    DLOGE("Failed to find prop-map entry for id %d", feature_info->prop_id);
+    return -EINVAL;
+  }
+
+  drm_feature.prop_id = panel_feature_property_map_[feature_info->prop_id];
+  drm_feature.prop_ptr = feature_info->prop_ptr;
+  drm_feature.prop_size = feature_info->prop_size;
+
+  switch (feature_info->prop_id) {
+    case kPanelFeatureSPRInitCfg:
+    case kPanelFeatureDsppIndex:
+    case kPanelFeatureDsppSPRInfo:
+    case kPanelFeatureDsppDemuraInfo:
+    case kPanelFeatureDsppRCInfo:
+    case kPanelFeatureRCInitCfg:
+      drm_feature.obj_type = DRM_MODE_OBJECT_CRTC;
+      drm_feature.obj_id =  token_.crtc_id;
+     break;
+    case kPanelFeatureSPRPackType:
+      drm_feature.obj_type = DRM_MODE_OBJECT_CONNECTOR;
+      drm_feature.obj_id =  token_.conn_id;
+     break;
+    default:
+     DLOGE("obj id population for property %d not implemented", feature_info->prop_id);
+     return -EINVAL;
+  }
+
+  drm_mgr_intf_->GetPanelFeature(&drm_feature);
+
+  feature_info->version = drm_feature.version;
+  feature_info->prop_size = drm_feature.prop_size;
+
+  return ret;
+}
+
+int HWPeripheralDRM::SetPanelFeature(const PanelFeaturePropertyInfo &feature_info) {
+  int ret = 0;
+  DRMPanelFeatureInfo drm_feature = {};
+  drm_feature.prop_id = panel_feature_property_map_[feature_info.prop_id];
+  drm_feature.prop_ptr = feature_info.prop_ptr;
+  drm_feature.version = feature_info.version;
+  drm_feature.prop_size = feature_info.prop_size;
+
+  switch (feature_info.prop_id) {
+    case kPanelFeatureSPRInitCfg:
+    case kPanelFeatureRCInitCfg:
+      drm_feature.obj_type = DRM_MODE_OBJECT_CRTC;
+      drm_feature.obj_id =  token_.crtc_id;
+     break;
+    case kPanelFeatureSPRPackType:
+      drm_feature.obj_type = DRM_MODE_OBJECT_CONNECTOR;
+      drm_feature.obj_id =  token_.conn_id;
+     break;
+    default:
+     DLOGE("Set Panel feature property %d not implemented", feature_info.prop_id);
+     return -EINVAL;
+  }
+
+  DLOGI("Set Panel feature property %d", feature_info.prop_id);
+  drm_mgr_intf_->SetPanelFeature(drm_feature);
+
+  return ret;
+}
+DisplayError HWPeripheralDRM::DelayFirstCommit() {
+  delay_first_commit_ = true;
+  return kErrorNone;
+}
 }  // namespace sdm

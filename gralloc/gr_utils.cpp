@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2011-2020, The Linux Foundation. All rights reserved.
-
+ * Copyright (c) 2011-2021, The Linux Foundation. All rights reserved.
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
  * met:
@@ -24,6 +24,40 @@
  * BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
  * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
  * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+ * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ *
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted (subject to the limitations in the
+ * disclaimer below) provided that the following conditions are met:
+ *
+ *    * Redistributions of source code must retain the above copyright
+ *      notice, this list of conditions and the following disclaimer.
+ *
+ *    * Redistributions in binary form must reproduce the above
+ *      copyright notice, this list of conditions and the following
+ *      disclaimer in the documentation and/or other materials provided
+ *      with the distribution.
+ *
+ *    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+ *      contributors may be used to endorse or promote products derived
+ *      from this software without specific prior written permission.
+ *
+ * NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+ * GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+ * HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+ * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+ * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+ * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
  * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
@@ -156,7 +190,13 @@ bool IsCompressedRGBFormat(int format) {
 bool IsCameraCustomFormat(int format) {
   switch (format) {
     case HAL_PIXEL_FORMAT_NV21_ZSL:
-    case HAL_PIXEL_FORMAT_NV12_LINEAR_FLEX:
+      if (CameraInfo::GetInstance() &&
+          !(CameraInfo::GetInstance()->IsCameraUtilsPresent())) {
+        // If the mapping is made to a camera custom format and lib
+        // is absent, we return false and handle internally.
+        return false;
+      }
+      [[fallthrough]];
     case HAL_PIXEL_FORMAT_NV12_UBWC_FLEX:
     case HAL_PIXEL_FORMAT_NV12_UBWC_FLEX_2_BATCH:
     case HAL_PIXEL_FORMAT_NV12_UBWC_FLEX_4_BATCH:
@@ -376,6 +416,9 @@ unsigned int GetSize(const BufferInfo &info, unsigned int alignedw, unsigned int
         }
         size = ALIGN(alignedw * alignedh * 2, SIZE_4K);
         break;
+      case HAL_PIXEL_FORMAT_NV12_LINEAR_FLEX:
+        size = VENUS_BUFFER_SIZE(COLOR_FMT_NV12_128, width, height);
+        break;
       case HAL_PIXEL_FORMAT_YCbCr_420_SP_VENUS:
       case HAL_PIXEL_FORMAT_NV12_ENCODEABLE:
         size = VENUS_BUFFER_SIZE(COLOR_FMT_NV12, width, height);
@@ -393,6 +436,10 @@ unsigned int GetSize(const BufferInfo &info, unsigned int alignedw, unsigned int
         break;
       case HAL_PIXEL_FORMAT_NV12_HEIF:
         size = VENUS_BUFFER_SIZE(COLOR_FMT_NV12_512, width, height);
+        break;
+      case HAL_PIXEL_FORMAT_NV21_ZSL:
+        size = ALIGN((alignedw * alignedh) + (alignedw * alignedh) / 2,
+                     SIZE_4K);
         break;
 #endif
       default:ALOGE("%s: Unrecognized pixel format: 0x%x", __FUNCTION__, format);
@@ -534,6 +581,10 @@ void GetYuvSPPlaneInfo(const BufferInfo &info, int format, uint32_t width, uint3
       c_height = height;
       break;
 #ifndef QMAA
+    case HAL_PIXEL_FORMAT_NV12_LINEAR_FLEX:
+      c_height = VENUS_UV_SCANLINES(COLOR_FMT_NV12_128, height);
+      c_size = c_stride * c_height;
+      break;
     case HAL_PIXEL_FORMAT_YCbCr_420_SP_VENUS:
     case HAL_PIXEL_FORMAT_NV12_ENCODEABLE:
       c_height = VENUS_UV_SCANLINES(COLOR_FMT_NV12, height);
@@ -1126,6 +1177,10 @@ void GetAlignedWidthAndHeight(const BufferInfo &info, unsigned int *alignedw,
       aligned_w = INT(VENUS_Y_STRIDE(COLOR_FMT_P010, width) / 2);
       aligned_h = INT(VENUS_Y_SCANLINES(COLOR_FMT_P010, height));
       break;
+    case HAL_PIXEL_FORMAT_NV12_LINEAR_FLEX:
+      aligned_w = INT(VENUS_Y_STRIDE(COLOR_FMT_NV12_128, width));
+      aligned_h = INT(VENUS_Y_SCANLINES(COLOR_FMT_NV12_128, height));
+      break;
     case HAL_PIXEL_FORMAT_YCbCr_420_SP_VENUS:
     case HAL_PIXEL_FORMAT_NV12_ENCODEABLE:
       aligned_w = INT(VENUS_Y_STRIDE(COLOR_FMT_NV12, width));
@@ -1141,6 +1196,10 @@ void GetAlignedWidthAndHeight(const BufferInfo &info, unsigned int *alignedw,
     case HAL_PIXEL_FORMAT_NV12_HEIF:
       aligned_w = INT(VENUS_Y_STRIDE(COLOR_FMT_NV12_512, width));
       aligned_h = INT(VENUS_Y_SCANLINES(COLOR_FMT_NV12_512, height));
+      break;
+    case HAL_PIXEL_FORMAT_NV21_ZSL:
+      aligned_w = ALIGN(width, 64);
+      aligned_h = ALIGN(height, 64);
       break;
 #endif
     default:
@@ -1181,6 +1240,7 @@ int GetBufferLayout(private_handle_t *hnd, uint32_t stride[4], uint32_t offset[4
   switch (hnd->format) {
     case HAL_PIXEL_FORMAT_YCbCr_420_SP:
     case HAL_PIXEL_FORMAT_YCbCr_422_SP:
+    case HAL_PIXEL_FORMAT_NV12_LINEAR_FLEX:
     case HAL_PIXEL_FORMAT_YCbCr_420_SP_VENUS:
     case HAL_PIXEL_FORMAT_NV12_ENCODEABLE:
     case HAL_PIXEL_FORMAT_YCbCr_420_SP_VENUS_UBWC:
@@ -1446,6 +1506,7 @@ int GetYUVPlaneInfo(const BufferInfo &info, int32_t format, int32_t width, int32
     // Semiplanar
     case HAL_PIXEL_FORMAT_YCbCr_420_SP:
     case HAL_PIXEL_FORMAT_YCbCr_422_SP:
+    case HAL_PIXEL_FORMAT_NV12_LINEAR_FLEX:
     case HAL_PIXEL_FORMAT_YCbCr_420_SP_VENUS:
     case HAL_PIXEL_FORMAT_NV12_ENCODEABLE:  // Same as YCbCr_420_SP_VENUS
     case HAL_PIXEL_FORMAT_NV21_ENCODEABLE:
@@ -1454,6 +1515,7 @@ int GetYUVPlaneInfo(const BufferInfo &info, int32_t format, int32_t width, int32
     case HAL_PIXEL_FORMAT_YCrCb_422_SP:
     case HAL_PIXEL_FORMAT_YCrCb_420_SP_ADRENO:
     case HAL_PIXEL_FORMAT_YCrCb_420_SP_VENUS:
+    case HAL_PIXEL_FORMAT_NV21_ZSL:
       *plane_count = 2;
       GetYuvSPPlaneInfo(info, format, width, height, 1, plane_info);
       GetYuvSubSamplingFactor(format, &h_subsampling, &v_subsampling);
@@ -1526,8 +1588,10 @@ int GetYUVPlaneInfo(const BufferInfo &info, int32_t format, int32_t width, int32
       GetYuvSubSamplingFactor(format, &h_subsampling, &v_subsampling);
       plane_info[0].h_subsampling = 0;
       plane_info[0].v_subsampling = 0;
+      plane_info[0].step = 2;
       plane_info[1].h_subsampling = h_subsampling;
       plane_info[1].v_subsampling = v_subsampling;
+      plane_info[1].step = 4;
       break;
 
     case HAL_PIXEL_FORMAT_YCbCr_420_TP10_UBWC:
@@ -1578,7 +1642,7 @@ int GetYUVPlaneInfo(const BufferInfo &info, int32_t format, int32_t width, int32
       plane_info[0].stride_bytes = static_cast<int32_t>(y_stride);
       plane_info[0].scanlines = static_cast<int32_t>(y_height);
       plane_info[0].size = static_cast<uint32_t>(y_size);
-      plane_info[0].step = 1;
+      plane_info[0].step = 2;
       plane_info[0].h_subsampling = 0;
       plane_info[0].v_subsampling = 0;
 
@@ -1678,6 +1742,7 @@ void GetYuvSubSamplingFactor(int32_t format, int *h_subsampling, int *v_subsampl
     case HAL_PIXEL_FORMAT_YCbCr_420_TP10_UBWC:
     case HAL_PIXEL_FORMAT_YCbCr_420_P010_UBWC:
     case HAL_PIXEL_FORMAT_YCbCr_420_P010_VENUS:
+    case HAL_PIXEL_FORMAT_NV12_LINEAR_FLEX:
     case HAL_PIXEL_FORMAT_YCbCr_420_SP_VENUS:
     case HAL_PIXEL_FORMAT_YCbCr_420_SP_VENUS_UBWC:
     case HAL_PIXEL_FORMAT_YCrCb_420_SP_ADRENO:
@@ -1687,6 +1752,7 @@ void GetYuvSubSamplingFactor(int32_t format, int *h_subsampling, int *v_subsampl
     case HAL_PIXEL_FORMAT_NV21_ENCODEABLE:
     case HAL_PIXEL_FORMAT_YV12:
     case HAL_PIXEL_FORMAT_NV12_HEIF:
+    case HAL_PIXEL_FORMAT_NV21_ZSL:
       *h_subsampling = 1;
       *v_subsampling = 1;
       break;
@@ -1847,6 +1913,7 @@ void GetDRMFormat(uint32_t format, uint32_t flags, uint32_t *drm_format,
     case HAL_PIXEL_FORMAT_XBGR_2101010:
       *drm_format = DRM_FORMAT_RGBX1010102;
       break;
+    case HAL_PIXEL_FORMAT_NV12_LINEAR_FLEX:
     case HAL_PIXEL_FORMAT_YCbCr_420_SP_VENUS:
       *drm_format = DRM_FORMAT_NV12;
       break;
@@ -1897,6 +1964,9 @@ void GetDRMFormat(uint32_t format, uint32_t flags, uint32_t *drm_format,
       break;*/
     case HAL_PIXEL_FORMAT_YV12:
       *drm_format = DRM_FORMAT_YVU420;
+      break;
+    case HAL_PIXEL_FORMAT_RGBA_FP16:
+      ALOGW("HAL_PIXEL_FORMAT_RGBA_FP16 currently not supported");
       break;
     default:
       ALOGE("Unsupported format %d", format);

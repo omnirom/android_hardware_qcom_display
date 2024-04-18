@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2014-2020, The Linux Foundation. All rights reserved.
+* Copyright (c) 2014-2021, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without modification, are permitted
 * provided that the following conditions are met:
@@ -22,12 +22,51 @@
 * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+/*
+* Changes from Qualcomm Innovation Center are provided under the following license:
+*
+* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+*
+* Redistribution and use in source and binary forms, with or without
+* modification, are permitted (subject to the limitations in the
+* disclaimer below) provided that the following conditions are met:
+*
+*    * Redistributions of source code must retain the above copyright
+*      notice, this list of conditions and the following disclaimer.
+*
+*    * Redistributions in binary form must reproduce the above
+*      copyright notice, this list of conditions and the following
+*      disclaimer in the documentation and/or other materials provided
+*      with the distribution.
+*
+*    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+*      contributors may be used to endorse or promote products derived
+*      from this software without specific prior written permission.
+*
+* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*/
+
 #ifndef __DISPLAY_BASE_H__
 #define __DISPLAY_BASE_H__
 
 #include <core/display_interface.h>
 #include <private/strategy_interface.h>
 #include <private/color_interface.h>
+#include <private/rc_intf.h>
+#include <private/panel_feature_property_intf.h>
+#include <private/panel_feature_factory_intf.h>
 
 #include <map>
 #include <mutex>
@@ -61,7 +100,7 @@ class DisplayBase : public DisplayInterface {
   virtual DisplayError GetDisplayState(DisplayState *state);
   virtual DisplayError GetNumVariableInfoConfigs(uint32_t *count);
   virtual DisplayError GetConfig(uint32_t index, DisplayConfigVariableInfo *variable_info);
-  virtual DisplayError GetConfig(DisplayConfigFixedInfo *variable_info);
+  virtual DisplayError GetConfig(DisplayConfigFixedInfo *fixed_info);
   virtual DisplayError GetActiveConfig(uint32_t *index);
   virtual DisplayError GetVSyncState(bool *enabled);
   virtual DisplayError SetDisplayState(DisplayState state, bool teardown,
@@ -120,7 +159,7 @@ class DisplayBase : public DisplayInterface {
     return kErrorNotSupported;
   }
   virtual DisplayError SetVSyncState(bool enable);
-  virtual void SetIdleTimeoutMs(uint32_t active_ms) {}
+  virtual void SetIdleTimeoutMs(uint32_t active_ms, uint32_t inactive_ms) {}
   virtual DisplayError SetMixerResolution(uint32_t width, uint32_t height);
   virtual DisplayError GetMixerResolution(uint32_t *width, uint32_t *height);
   virtual DisplayError SetFrameBufferConfig(const DisplayConfigVariableInfo &variable_info);
@@ -164,6 +203,8 @@ class DisplayBase : public DisplayInterface {
   virtual DisplayError ClearLUTs() {
     return kErrorNotSupported;
   }
+  virtual DisplayError DelayFirstCommit();
+  QSyncMode active_qsync_mode_ = kQSyncModeNone;
 
  protected:
   const char *kBt2020Pq = "bt2020_pq";
@@ -198,6 +239,7 @@ class DisplayBase : public DisplayInterface {
   PrimariesTransfer GetBlendSpaceFromColorMode();
   bool IsHdrMode(const AttrVal &attr);
   void InsertBT2020PqHlgModes(const std::string &str_render_intent);
+  DisplayError SetupRC();
   DisplayError HandlePendingVSyncEnable(const shared_ptr<Fence> &retire_fence);
   DisplayError HandlePendingPowerState(const shared_ptr<Fence> &retire_fence);
 
@@ -256,10 +298,19 @@ class DisplayBase : public DisplayInterface {
 
   static Locker display_power_reset_lock_;
   static bool display_power_reset_pending_;
+  bool rc_panel_feature_init_ = false;
+  bool rc_enable_prop_ = false;
+  PanelFeatureFactoryIntf *pf_factory_ = nullptr;
+  PanelFeaturePropertyIntf *prop_intf_ = nullptr;
+  bool first_cycle_ = true;
 
  private:
   bool StartDisplayPowerReset();
   void EndDisplayPowerReset();
+  void SetRCData(LayerStack *layer_stack);
+  unsigned int rc_cached_res_width_ = 0;
+  unsigned int rc_cached_res_height_ = 0;
+  std::unique_ptr<RCIntf> rc_core_ = nullptr;
 };
 
 }  // namespace sdm

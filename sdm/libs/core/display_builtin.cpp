@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2014 - 2020, The Linux Foundation. All rights reserved.
+* Copyright (c) 2014 - 2021, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without modification, are permitted
 * provided that the following conditions are met:
@@ -20,6 +20,40 @@
 * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
 * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*
+* Changes from Qualcomm Innovation Center are provided under the following license:
+*
+* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+*
+* Redistribution and use in source and binary forms, with or without
+* modification, are permitted (subject to the limitations in the
+* disclaimer below) provided that the following conditions are met:
+*
+*    * Redistributions of source code must retain the above copyright
+*      notice, this list of conditions and the following disclaimer.
+*
+*    * Redistributions in binary form must reproduce the above
+*      copyright notice, this list of conditions and the following
+*      disclaimer in the documentation and/or other materials provided
+*      with the distribution.
+*
+*    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+*      contributors may be used to endorse or promote products derived
+*      from this software without specific prior written permission.
+*
+* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include <utils/constants.h>
@@ -34,7 +68,9 @@
 #include <vector>
 
 #include "display_builtin.h"
+#ifndef TARGET_HEADLESS
 #include "drm_interface.h"
+#endif
 #include "drm_master.h"
 #include "hw_info_interface.h"
 #include "hw_interface.h"
@@ -115,12 +151,26 @@ DisplayError DisplayBuiltIn::Init() {
 
   current_refresh_rate_ = hw_panel_info_.max_fps;
 
-  initColorSamplingState();
-
   int value = 0;
+  Debug::Get()->GetProperty(ENABLE_HISTOGRAM_INTR, &value);
+  if (value == 1) {
+    initColorSamplingState();
+  }
+
+  value = 0;
   Debug::Get()->GetProperty(DEFER_FPS_FRAME_COUNT, &value);
   deferred_config_.frame_count = (value > 0) ? UINT32(value) : 0;
 
+error = CreatePanelfeatures();
+  if (error != kErrorNone) {
+    DLOGE("Failed to setup panel feature factory, error: %d", error);
+  } else {
+    // Get status of RC enablement property. Default RC is disabled.
+    int rc_prop_value = 0;
+    Debug::GetProperty(ENABLE_ROUNDED_CORNER, &rc_prop_value);
+    rc_enable_prop_ = rc_prop_value ? true : false;
+    DLOGI("RC feature %s.", rc_enable_prop_ ? "enabled" : "disabled");
+  }
   value = 0;
   DebugHandler::Get()->GetProperty(DISABLE_DYNAMIC_FPS, &value);
   disable_dyn_fps_ = (value == 1);
@@ -128,6 +178,13 @@ DisplayError DisplayBuiltIn::Init() {
   value = 0;
   DebugHandler::Get()->GetProperty(ENHANCE_IDLE_TIME, &value);
   enhance_idle_time_ = (value == 1);
+
+  value = 0;
+  DebugHandler::Get()->GetProperty(ENABLE_QSYNC_IDLE, &value);
+  enable_qsync_idle_ = hw_panel_info_.qsync_support && (value == 1);
+  if (enable_qsync_idle_) {
+    DLOGI("Enabling qsync on idling");
+  }
 
   return error;
 }
@@ -137,6 +194,43 @@ DisplayError DisplayBuiltIn::Deinit() {
 
   dpps_info_.Deinit();
   return DisplayBase::Deinit();
+}
+
+// Create instance for RC, SPR and demura feature.
+DisplayError DisplayBuiltIn::CreatePanelfeatures() {
+  if (pf_factory_ && prop_intf_) {
+    return kErrorNone;
+  }
+
+  if (!GetPanelFeatureFactoryIntfFunc_) {
+    DynLib feature_impl_lib;
+    if (feature_impl_lib.Open(EXTENSION_LIBRARY_NAME)) {
+      if (!feature_impl_lib.Sym("GetPanelFeatureFactoryIntf",
+                                reinterpret_cast<void **>(&GetPanelFeatureFactoryIntfFunc_))) {
+        DLOGE("Unable to load symbols, error = %s", feature_impl_lib.Error());
+        return kErrorUndefined;
+      }
+    } else {
+      DLOGW("Unable to load = %s, error = %s", EXTENSION_LIBRARY_NAME, feature_impl_lib.Error());
+      DLOGW("Panel features are not supported");
+      return kErrorNotSupported;
+    }
+  }
+
+  pf_factory_ = GetPanelFeatureFactoryIntfFunc_();
+  if (!pf_factory_) {
+    DLOGE("Failed to create PanelFeatureFactoryIntf");
+    return kErrorResources;
+  }
+
+  prop_intf_ = hw_intf_->GetPanelFeaturePropertyIntf();
+  if (!prop_intf_) {
+    DLOGE("Failed to create PanelFeaturePropertyIntf");
+    pf_factory_ = nullptr;
+    return kErrorResources;
+  }
+
+  return kErrorNone;
 }
 
 DisplayError DisplayBuiltIn::Prepare(LayerStack *layer_stack) {
@@ -155,8 +249,7 @@ DisplayError DisplayBuiltIn::Prepare(LayerStack *layer_stack) {
     }
   } else {
     if (CanSkipDisplayPrepare(layer_stack)) {
-      hw_layers_.hw_avr_info.update = needs_avr_update_;
-      hw_layers_.hw_avr_info.mode = GetAvrMode(qsync_mode_);
+      UpdateQsyncMode();
       return kErrorNone;
     }
   }
@@ -164,8 +257,7 @@ DisplayError DisplayBuiltIn::Prepare(LayerStack *layer_stack) {
   // Clean hw layers for reuse.
   hw_layers_ = HWLayers();
 
-  hw_layers_.hw_avr_info.update = needs_avr_update_;
-  hw_layers_.hw_avr_info.mode = GetAvrMode(qsync_mode_);
+  UpdateQsyncMode();
 
   left_frame_roi_ = {};
   right_frame_roi_ = {};
@@ -181,6 +273,31 @@ DisplayError DisplayBuiltIn::Prepare(LayerStack *layer_stack) {
   }
 
   return error;
+}
+
+void DisplayBuiltIn::UpdateQsyncMode() {
+  if (!hw_panel_info_.qsync_support || (hw_panel_info_.mode == kModeCommand)) {
+    return;
+  }
+
+  QSyncMode mode = kQSyncModeNone;
+  if (handle_idle_timeout_ && enable_qsync_idle_) {
+    // Override to continuous mode upon idling.
+    mode = kQSyncModeContinuous;
+    DLOGV_IF(kTagDisplay, "Qsync entering continuous mode");
+  } else {
+    // Set Qsync mode requested by client.
+    mode = qsync_mode_;
+    DLOGV_IF(kTagDisplay, "Restoring client's qsync mode: %d", mode);
+  }
+
+  hw_layers_.hw_avr_info.update = (mode != active_qsync_mode_) || needs_avr_update_;
+  hw_layers_.hw_avr_info.mode = GetAvrMode(mode);
+
+  DLOGV_IF(kTagDisplay, "update: %d mode: %d", hw_layers_.hw_avr_info.update, mode);
+
+  // Store active mode.
+  active_qsync_mode_ = mode;
 }
 
 HWAVRModes DisplayBuiltIn::GetAvrMode(QSyncMode mode) {
@@ -199,6 +316,7 @@ HWAVRModes DisplayBuiltIn::GetAvrMode(QSyncMode mode) {
 
 void DisplayBuiltIn::initColorSamplingState() {
   samplingState = SamplingState::Off;
+#ifndef TARGET_HEADLESS
   histogramCtrl.object_type = DRM_MODE_OBJECT_CRTC;
   histogramCtrl.feature_id = sde_drm::DRMDPPSFeatureID::kFeatureAbaHistCtrl;
   histogramCtrl.value = sde_drm::HistModes::kHistDisabled;
@@ -207,10 +325,12 @@ void DisplayBuiltIn::initColorSamplingState() {
   histogramIRQ.feature_id = sde_drm::DRMDPPSFeatureID::kFeatureAbaHistIRQ;
   histogramIRQ.value = sde_drm::HistModes::kHistDisabled;
   histogramSetup = true;
+#endif
 }
 
 DisplayError DisplayBuiltIn::setColorSamplingState(SamplingState state) {
   samplingState = state;
+#ifndef TARGET_HEADLESS
   if (samplingState == SamplingState::On) {
     histogramCtrl.value = sde_drm::HistModes::kHistEnabled;
     histogramIRQ.value = sde_drm::HistModes::kHistEnabled;
@@ -221,6 +341,9 @@ DisplayError DisplayBuiltIn::setColorSamplingState(SamplingState state) {
 
   // effectively drmModeAtomicAddProperty for the SDE_DSPP_HIST_CTRL_V1
   return DppsProcessOps(kDppsSetFeature, &histogramCtrl, sizeof(histogramCtrl));
+#else
+  return kErrorNone;
+#endif
 }
 
 DisplayError DisplayBuiltIn::colorSamplingOn() {
@@ -277,7 +400,9 @@ DisplayError DisplayBuiltIn::Commit(LayerStack *layer_stack) {
   }
   // effectively drmModeAtomicAddProperty for SDE_DSPP_HIST_IRQ_V1
   if (histogramSetup) {
+#ifndef TARGET_HEADLESS
     DppsProcessOps(kDppsSetFeature, &histogramIRQ, sizeof(histogramIRQ));
+#endif
   }
 
   error = DisplayBase::Commit(layer_stack);
@@ -326,6 +451,18 @@ DisplayError DisplayBuiltIn::Commit(LayerStack *layer_stack) {
   }
   dpps_info_.Init(this, hw_panel_info_.panel_name);
 
+  HandleQsyncPostCommit(layer_stack);
+
+  first_cycle_ = false;
+
+  previous_retire_fence_ = layer_stack->retire_fence;
+
+  handle_idle_timeout_ = false;
+
+  return error;
+}
+
+void DisplayBuiltIn::HandleQsyncPostCommit(LayerStack *layer_stack) {
   if (qsync_mode_ == kQsyncModeOneShot) {
     // Reset qsync mode.
     SetQSyncMode(kQSyncModeNone);
@@ -337,11 +474,13 @@ DisplayError DisplayBuiltIn::Commit(LayerStack *layer_stack) {
     needs_avr_update_ = false;
   }
 
-  first_cycle_ = false;
+  SetVsyncStatus(true /*Re-enable vsync.*/);
 
-  previous_retire_fence_ = layer_stack->retire_fence;
-
-  return error;
+  bool notify_idle = enable_qsync_idle_ && (active_qsync_mode_ != kQSyncModeNone) &&
+                     handle_idle_timeout_;
+  if (notify_idle) {
+    event_handler_->HandleEvent(kPostIdleTimeout);
+  }
 }
 
 void DisplayBuiltIn::UpdateDisplayModeParams() {
@@ -350,7 +489,7 @@ void DisplayBuiltIn::UpdateDisplayModeParams() {
     ControlPartialUpdate(false /* enable */, &pending);
   } else if (hw_panel_info_.mode == kModeCommand) {
     // Flush idle timeout value currently set.
-    comp_manager_->SetIdleTimeoutMs(display_comp_ctx_, 0);
+    comp_manager_->SetIdleTimeoutMs(display_comp_ctx_, 0, 0);
     switch_to_cmd_ = true;
   }
 }
@@ -386,9 +525,9 @@ DisplayError DisplayBuiltIn::SetDisplayState(DisplayState state, bool teardown,
   return kErrorNone;
 }
 
-void DisplayBuiltIn::SetIdleTimeoutMs(uint32_t active_ms) {
+void DisplayBuiltIn::SetIdleTimeoutMs(uint32_t active_ms, uint32_t inactive_ms) {
   lock_guard<recursive_mutex> obj(recursive_mutex_);
-  comp_manager_->SetIdleTimeoutMs(display_comp_ctx_, active_ms);
+  comp_manager_->SetIdleTimeoutMs(display_comp_ctx_, active_ms, inactive_ms);
 }
 
 DisplayError DisplayBuiltIn::SetDisplayMode(uint32_t mode) {
@@ -429,7 +568,7 @@ DisplayError DisplayBuiltIn::SetDisplayMode(uint32_t mode) {
       ControlPartialUpdate(false /* enable */, &pending);
     } else if (mode == kModeCommand) {
       // Flush idle timeout value currently set.
-      comp_manager_->SetIdleTimeoutMs(display_comp_ctx_, 0);
+      comp_manager_->SetIdleTimeoutMs(display_comp_ctx_, 0, 0);
       switch_to_cmd_ = true;
     }
   }
@@ -474,6 +613,7 @@ DisplayError DisplayBuiltIn::SetPanelBrightness(float brightness) {
   DisplayError err = hw_intf_->SetPanelBrightness(level);
   if (err == kErrorNone) {
     level_remainder_ = level_remainder;
+    pending_brightness_ = false;
     DLOGI_IF(kTagDisplay, "Setting brightness to level %d (%f percent)", level,
              brightness * 100);
   } else if (err == kErrorDeferred) {
@@ -523,7 +663,7 @@ DisplayError DisplayBuiltIn::SetRefreshRate(uint32_t refresh_rate, bool final_ra
     return kErrorParameters;
   }
 
-  if (CanLowerFps(idle_screen) && !final_rate) {
+  if (CanLowerFps(idle_screen) && !final_rate && !enable_qsync_idle_) {
     refresh_rate = hw_panel_info_.min_fps;
   }
 
@@ -549,7 +689,6 @@ DisplayError DisplayBuiltIn::SetRefreshRate(uint32_t refresh_rate, bool final_ra
 
   // On success, set current refresh rate to new refresh rate
   current_refresh_rate_ = refresh_rate;
-  handle_idle_timeout_ = false;
   deferred_config_.MarkDirty();
 
   return ReconfigureDisplay();
@@ -574,13 +713,36 @@ bool DisplayBuiltIn::CanLowerFps(bool idle_screen) {
 }
 
 DisplayError DisplayBuiltIn::VSync(int64_t timestamp) {
-  if (vsync_enable_ && !drop_hw_vsync_) {
-    DisplayEventVSync vsync;
-    vsync.timestamp = timestamp;
-    event_handler_->VSync(vsync);
+  DTRACE_SCOPED();
+  bool qsync_enabled = enable_qsync_idle_ && (active_qsync_mode_ != kQSyncModeNone);
+  // Client isn't aware of underlying qsync mode.
+  // Disable vsync propagation as long as qsync is enabled.
+  bool propagate_vsync = vsync_enable_ && !drop_hw_vsync_ && !qsync_enabled;
+  if (!propagate_vsync) {
+    // Re enable when display updates.
+    SetVsyncStatus(false /*Disable vsync events.*/);
+    return kErrorNone;
   }
 
+  DisplayEventVSync vsync;
+  vsync.timestamp = timestamp;
+  event_handler_->VSync(vsync);
+
   return kErrorNone;
+}
+
+void DisplayBuiltIn::SetVsyncStatus(bool enable) {
+  string trace_name = enable ? "enable" : "disable";
+  DTRACE_BEGIN(trace_name.c_str());
+  if (enable) {
+    // Enable if vsync is still enabled.
+    hw_events_intf_->SetEventState(HWEvent::VSYNC, vsync_enable_);
+    pending_vsync_enable_ = false;
+  } else {
+    hw_events_intf_->SetEventState(HWEvent::VSYNC, false);
+    pending_vsync_enable_ = true;
+  }
+  DTRACE_END();
 }
 
 void DisplayBuiltIn::IdleTimeout() {
@@ -914,7 +1076,7 @@ DisplayError DisplayBuiltIn::HandleSecureEvent(SecureEvent secure_event, LayerSt
 }
 
 DisplayError DisplayBuiltIn::GetQSyncMode(QSyncMode *qsync_mode) {
-  *qsync_mode = qsync_mode_;
+  *qsync_mode = active_qsync_mode_;
   return kErrorNone;
 }
 
@@ -1239,6 +1401,28 @@ void DisplayBuiltIn::GetFpsConfig(HWDisplayAttributes *display_attr, HWPanelInfo
   display_attr->fps = display_attributes_.fps;
   display_attr->vsync_period_ns = display_attributes_.vsync_period_ns;
   panel_info->transfer_time_us = hw_panel_info_.transfer_time_us;
+}
+
+DisplayError DisplayBuiltIn::GetConfig(DisplayConfigFixedInfo *fixed_info) {
+  lock_guard<recursive_mutex> obj(recursive_mutex_);
+  fixed_info->is_cmdmode = (hw_panel_info_.mode == kModeCommand);
+
+  HWResourceInfo hw_resource_info = HWResourceInfo();
+  hw_info_intf_->GetHWResourceInfo(&hw_resource_info);
+
+  fixed_info->hdr_supported = hw_resource_info.has_hdr;
+  // Built-in displays always support HDR10+ when the target supports HDR
+  fixed_info->hdr_plus_supported = hw_resource_info.has_hdr;
+  // Populate luminance values only if hdr will be supported on that display
+  fixed_info->max_luminance = fixed_info->hdr_supported ? hw_panel_info_.peak_luminance: 0;
+  fixed_info->average_luminance = fixed_info->hdr_supported ? hw_panel_info_.average_luminance : 0;
+  fixed_info->min_luminance = fixed_info->hdr_supported ?  hw_panel_info_.blackness_level: 0;
+  fixed_info->hdr_eotf = hw_panel_info_.hdr_eotf;
+  fixed_info->hdr_metadata_type_one = hw_panel_info_.hdr_metadata_type_one;
+  fixed_info->partial_update = hw_panel_info_.partial_update;
+  fixed_info->readback_supported = hw_resource_info.has_concurrent_writeback;
+
+  return kErrorNone;
 }
 
 }  // namespace sdm

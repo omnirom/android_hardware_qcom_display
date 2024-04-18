@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2014-2020, The Linux Foundation. All rights reserved.
+* Copyright (c) 2014-2021, The Linux Foundation. All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are
@@ -24,6 +24,42 @@
 * BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
 * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
 * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+* IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*/
+
+/*
+* Changes from Qualcomm Innovation Center are provided under the following license:
+*
+* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+*
+* Redistribution and use in source and binary forms, with or without
+* modification, are permitted (subject to the limitations in the
+* disclaimer below) provided that the following conditions are met:
+*
+*    * Redistributions of source code must retain the above copyright
+*      notice, this list of conditions and the following disclaimer.
+*
+*    * Redistributions in binary form must reproduce the above
+*      copyright notice, this list of conditions and the following
+*      disclaimer in the documentation and/or other materials provided
+*      with the distribution.
+*
+*    * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+*      contributors may be used to endorse or promote products derived
+*      from this software without specific prior written permission.
+*
+* NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+* GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+* HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+* WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+* MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+* IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+* ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+* DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+* GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+* IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+* OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
@@ -153,13 +189,6 @@ int HWCDisplayBuiltIn::Init() {
                       &window_rect_.right, &window_rect_.bottom) != kErrorUndefined;
     DLOGI("Window rect : [%f %f %f %f]", window_rect_.left, window_rect_.top,
           window_rect_.right, window_rect_.bottom);
-
-    value = 0;
-    HWCDebugHandler::Get()->GetProperty(ENABLE_POMS_DURING_DOZE, &value);
-    enable_poms_during_doze_ = (value == 1);
-    if (enable_poms_during_doze_) {
-      DLOGI("Enable POMS during Doze mode %" PRIu64 , id_);
-    }
   }
 
   value = 0;
@@ -179,12 +208,18 @@ int HWCDisplayBuiltIn::Init() {
   enhance_idle_time_ = (enhance_idle_time == 1);
   DLOGI("enhance_idle_time: %d", enhance_idle_time);
 
+  HWCDebugHandler::Get()->GetProperty(PERF_HINT_WINDOW_PROP, &perf_hint_window_);
+  HWCDebugHandler::Get()->GetProperty(ENABLE_PERF_HINT_LARGE_COMP_CYCLE,
+                                      &perf_hint_large_comp_cycle_);
+
   return status;
 }
 
 void HWCDisplayBuiltIn::Dump(std::ostringstream *os) {
   HWCDisplay::Dump(os);
+#ifndef TARGET_HEADLESS
   *os << histogram.Dump();
+#endif
 }
 
 void HWCDisplayBuiltIn::ValidateUiScaling() {
@@ -238,6 +273,16 @@ HWC2::Error HWCDisplayBuiltIn::Validate(uint32_t *out_num_types, uint32_t *out_n
     MarkLayersForClientComposition();
   }
 
+  // apply pending DE config
+  PPPendingParams pending_action;
+  PPDisplayAPIPayload req_payload;
+  pending_action.action = kGetDetailedEnhancerData;
+  pending_action.params = NULL;
+  int err = display_intf_->ColorSVCRequestRoute(req_payload, NULL, &pending_action);
+  if (!err && pending_action.action == kConfigureDetailedEnhancer) {
+      err = SetHWDetailedEnhancerConfig(pending_action.params);
+  }
+
   bool pending_output_dump = dump_frame_count_ && dump_output_to_file_;
 
   if (readback_buffer_queued_ || pending_output_dump) {
@@ -284,6 +329,9 @@ HWC2::Error HWCDisplayBuiltIn::Validate(uint32_t *out_num_types, uint32_t *out_n
     // Avoid flush for Command mode panel.
     flush_ = !client_connected_;
     validated_ = true;
+    layer_changes_.clear();
+    layer_requests_.clear();
+    DLOGV_IF(kTagDisplay, "layer_set is empty");
     return status;
   }
 
@@ -851,7 +899,7 @@ void HWCDisplayBuiltIn::SetQDCMSolidFillInfo(bool enable, const LayerSolidFill &
 }
 
 void HWCDisplayBuiltIn::ToggleCPUHint(bool set) {
-  if (!cpu_hint_) {
+  if (!cpu_hint_ || !perf_hint_window_) {
     return;
   }
 
@@ -922,8 +970,8 @@ uint32_t HWCDisplayBuiltIn::GetOptimalRefreshRate(bool one_updating_layer) {
   return active_refresh_rate_;
 }
 
-void HWCDisplayBuiltIn::SetIdleTimeoutMs(uint32_t timeout_ms) {
-  display_intf_->SetIdleTimeoutMs(timeout_ms);
+void HWCDisplayBuiltIn::SetIdleTimeoutMs(uint32_t timeout_ms, uint32_t inactive_ms) {
+  display_intf_->SetIdleTimeoutMs(timeout_ms, inactive_ms);
   validated_ = false;
 }
 
@@ -1090,6 +1138,89 @@ DisplayError HWCDisplayBuiltIn::SetDetailEnhancerConfig
   return error;
 }
 
+DisplayError HWCDisplayBuiltIn::SetHWDetailedEnhancerConfig(void *params) {
+  DisplayError err = kErrorNone;
+  DisplayDetailEnhancerData de_data;
+
+  PPDETuningCfgData *de_tuning_cfg_data = reinterpret_cast<PPDETuningCfgData*>(params);
+  if (de_tuning_cfg_data->cfg_pending) {
+    if (!de_tuning_cfg_data->cfg_en) {
+      de_data.enable = 0;
+      DLOGV_IF(kTagQDCM, "Disable DE config");
+    } else {
+      de_data.override_flags = kOverrideDEEnable;
+      de_data.enable = 1;
+
+      DLOGV_IF(kTagQDCM, "Enable DE: flags %u, sharp_factor %d, thr_quiet %d, thr_dieout %d, "
+        "thr_low %d, thr_high %d, clip %d, quality %d, content_type %d, de_blend %d",
+        de_tuning_cfg_data->params.flags, de_tuning_cfg_data->params.sharp_factor,
+        de_tuning_cfg_data->params.thr_quiet, de_tuning_cfg_data->params.thr_dieout,
+        de_tuning_cfg_data->params.thr_low, de_tuning_cfg_data->params.thr_high,
+        de_tuning_cfg_data->params.clip, de_tuning_cfg_data->params.quality,
+        de_tuning_cfg_data->params.content_type, de_tuning_cfg_data->params.de_blend);
+
+      if (de_tuning_cfg_data->params.flags & kDeTuningFlagSharpFactor) {
+        de_data.override_flags |= kOverrideDESharpen1;
+        de_data.sharp_factor = de_tuning_cfg_data->params.sharp_factor;
+      }
+
+      if (de_tuning_cfg_data->params.flags & kDeTuningFlagClip) {
+        de_data.override_flags |= kOverrideDEClip;
+        de_data.clip = de_tuning_cfg_data->params.clip;
+      }
+
+      if (de_tuning_cfg_data->params.flags & kDeTuningFlagThrQuiet) {
+        de_data.override_flags |= kOverrideDEThrQuiet;
+        de_data.thr_quiet = de_tuning_cfg_data->params.thr_quiet;
+      }
+
+      if (de_tuning_cfg_data->params.flags & kDeTuningFlagThrDieout) {
+        de_data.override_flags |= kOverrideDEThrDieout;
+        de_data.thr_dieout = de_tuning_cfg_data->params.thr_dieout;
+      }
+
+      if (de_tuning_cfg_data->params.flags & kDeTuningFlagThrLow) {
+        de_data.override_flags |= kOverrideDEThrLow;
+        de_data.thr_low = de_tuning_cfg_data->params.thr_low;
+      }
+
+      if (de_tuning_cfg_data->params.flags & kDeTuningFlagThrHigh) {
+        de_data.override_flags |= kOverrideDEThrHigh;
+        de_data.thr_high = de_tuning_cfg_data->params.thr_high;
+      }
+
+      if (de_tuning_cfg_data->params.flags & kDeTuningFlagContentQualLevel) {
+        switch (de_tuning_cfg_data->params.quality) {
+          case kDeContentQualLow:
+            de_data.quality_level = kContentQualityLow;
+            break;
+          case kDeContentQualMedium:
+            de_data.quality_level = kContentQualityMedium;
+            break;
+          case kDeContentQualHigh:
+            de_data.quality_level = kContentQualityHigh;
+            break;
+          case kDeContentQualUnknown:
+          default:
+            de_data.quality_level = kContentQualityUnknown;
+            break;
+        }
+      }
+
+      if (de_tuning_cfg_data->params.flags & kDeTuningFlagDeBlend) {
+        de_data.override_flags |= kOverrideDEBlend;
+        de_data.de_blend = de_tuning_cfg_data->params.de_blend;
+      }
+    }
+    err = SetDetailEnhancerConfig(de_data);
+    if (err) {
+      DLOGW("SetDetailEnhancerConfig failed. err = %d", err);
+    }
+    de_tuning_cfg_data->cfg_pending = false;
+  }
+  return err;
+}
+
 DisplayError HWCDisplayBuiltIn::ControlPartialUpdate(bool enable, uint32_t *pending) {
   DisplayError error = kErrorNone;
 
@@ -1116,11 +1247,13 @@ HWC2::Error HWCDisplayBuiltIn::SetDisplayedContentSamplingEnabledVndService(bool
   std::unique_lock<decltype(sampling_mutex)> lk(sampling_mutex);
   vndservice_sampling_vote = enabled;
   if (api_sampling_vote || vndservice_sampling_vote) {
+#ifndef TARGET_HEADLESS
     histogram.start();
     display_intf_->colorSamplingOn();
   } else {
     display_intf_->colorSamplingOff();
     histogram.stop();
+#endif
   }
   return HWC2::Error::None;
 }
@@ -1141,6 +1274,7 @@ HWC2::Error HWCDisplayBuiltIn::SetDisplayedContentSamplingEnabled(int32_t enable
 
   auto start = api_sampling_vote || vndservice_sampling_vote;
   if (start && max_frames == 0) {
+#ifndef TARGET_HEADLESS
     histogram.start();
     display_intf_->colorSamplingOn();
   } else if (start) {
@@ -1149,20 +1283,26 @@ HWC2::Error HWCDisplayBuiltIn::SetDisplayedContentSamplingEnabled(int32_t enable
   } else {
     display_intf_->colorSamplingOff();
     histogram.stop();
+#endif
   }
   return HWC2::Error::None;
 }
 
 HWC2::Error HWCDisplayBuiltIn::GetDisplayedContentSamplingAttributes(
     int32_t *format, int32_t *dataspace, uint8_t *supported_components) {
-  return histogram.getAttributes(format, dataspace, supported_components);
+#ifndef TARGET_HEADLESS
+ return histogram.getAttributes(format, dataspace, supported_components);
+#endif
+ return HWC2::Error::None;
 }
 
 HWC2::Error HWCDisplayBuiltIn::GetDisplayedContentSample(
     uint64_t max_frames, uint64_t timestamp, uint64_t *numFrames,
     int32_t samples_size[NUM_HISTOGRAM_COLOR_COMPONENTS],
     uint64_t *samples[NUM_HISTOGRAM_COLOR_COMPONENTS]) {
+#ifndef TARGET_HEADLESS
   histogram.collect(max_frames, timestamp, samples_size, samples, numFrames);
+#endif
   return HWC2::Error::None;
 }
 
@@ -1229,6 +1369,61 @@ DisplayError HWCDisplayBuiltIn::GetDynamicDSIClock(uint64_t *bitclk) {
 DisplayError HWCDisplayBuiltIn::GetSupportedDSIClock(std::vector<uint64_t> *bitclk_rates) {
   if (display_intf_) {
     return display_intf_->GetSupportedDSIClock(bitclk_rates);
+  }
+
+  return kErrorNotSupported;
+}
+
+DisplayError HWCDisplayBuiltIn::SetStandByMode(bool enable, bool is_twm) {
+  if (enable) {
+    if (!display_null_.IsActive()) {
+      stored_display_intf_ = display_intf_;
+      display_intf_ = &display_null_;
+      shared_ptr<Fence> release_fence = nullptr;
+
+      if (is_twm && current_power_mode_ == HWC2::PowerMode::On) {
+        DLOGD("Display is in ON state and device is entering TWM mode.");
+        DisplayError error = stored_display_intf_->SetDisplayState(kStateDoze,
+                                false /* teardown */,
+                                &release_fence);
+        if (error != kErrorNone) {
+          if (error == kErrorShutDown) {
+            shutdown_pending_ = true;
+            return error;
+          }
+          DLOGE("Set state failed. Error = %d", error);
+          return error;
+        } else {
+          current_power_mode_ = HWC2::PowerMode::Doze;
+          DLOGD("Display moved to DOZE state.");
+        }
+      }
+
+      display_null_.SetActive(true);
+      DLOGD("Null display is connected successfully");
+    } else {
+      DLOGD("Null display is already connected.");
+    }
+  } else {
+    if (display_null_.IsActive()) {
+      if (is_twm) {
+        DLOGE("Unexpected event. Display state may be inconsistent.");
+        return kErrorNotSupported;
+      }
+      display_intf_ = stored_display_intf_;
+      validated_ = false;
+      display_null_.SetActive(false);
+      DLOGD("Display is connected successfully");
+    } else {
+      DLOGD("Display is already connected.");
+    }
+  }
+  return kErrorNone;
+}
+
+DisplayError HWCDisplayBuiltIn::DelayFirstCommit() {
+  if (display_intf_) {
+    return display_intf_->DelayFirstCommit();
   }
 
   return kErrorNotSupported;
@@ -1330,13 +1525,7 @@ bool HWCDisplayBuiltIn::HasSmartPanelConfig(void) {
     return IsSmartPanelConfig(config);
   }
 
-  for (auto &config : variable_config_map_) {
-    if (config.second.smart_panel) {
-      return true;
-    }
-  }
-
-  return false;
+  return smart_panel_config_;
 }
 
 int HWCDisplayBuiltIn::Deinit() {
@@ -1344,8 +1533,9 @@ int HWCDisplayBuiltIn::Deinit() {
   if (gl_layer_stitch_) {
     layer_stitch_task_.PerformTask(LayerStitchTaskCode::kCodeDestroyInstance, nullptr);
   }
-
+#ifndef TARGET_HEADLESS
   histogram.stop();
+#endif
   return HWCDisplay::Deinit();
 }
 
@@ -1478,7 +1668,9 @@ void HWCDisplayBuiltIn::AppendStitchLayer() {
 }
 
 DisplayError HWCDisplayBuiltIn::HistogramEvent(int fd, uint32_t blob_id) {
+#ifndef TARGET_HEADLESS
   histogram.notify_histogram_event(fd, blob_id);
+#endif
   return kErrorNone;
 }
 
@@ -1497,6 +1689,13 @@ bool HWCDisplayBuiltIn::HasReadBackBufferSupport() {
   DisplayConfigFixedInfo fixed_info = {};
   display_intf_->GetConfig(&fixed_info);
 
+  uint32_t width = UINT32(window_rect_.right + window_rect_.left);
+  uint32_t height = UINT32(window_rect_.bottom + window_rect_.top);
+  if (width > 0 || height > 0) {
+     DLOGE("No ReadBackBuffersupport on window_rect width = %u - height = %u",width,height);
+     return false;
+  }
+
   return fixed_info.readback_supported;
 }
 
@@ -1514,6 +1713,36 @@ uint32_t HWCDisplayBuiltIn::GetUpdatingAppLayersCount() {
   }
 
   return updating_count;
+}
+
+bool HWCDisplayBuiltIn::IsDisplayIdle() {
+  // Notify only if this display is source of vsync.
+  bool vsync_source = (callbacks_->GetVsyncSource() == id_);
+  return vsync_source && display_idle_;
+}
+
+void HWCDisplayBuiltIn::SetCpuPerfHintLargeCompCycle() {
+  if (!cpu_hint_ || !perf_hint_large_comp_cycle_) {
+    DLOGV_IF(kTagResources, "cpu_hint_ not initialized or property not set");
+    return;
+  }
+
+  //Send large comp cycle hint only for fps >= 90
+  if (active_refresh_rate_ < 90) {
+    DLOGV_IF(kTagResources, "Skip large comp cycle hint for current fps - %u",
+             active_refresh_rate_);
+    return;
+  }
+
+  for (auto hwc_layer : layer_set_) {
+    Layer *layer = hwc_layer->GetSDMLayer();
+    if (layer->composition == kCompositionGPU) {
+      DLOGV_IF(kTagResources, "Set perf hint for large comp cycle");
+      int hwc_tid = gettid();
+      cpu_hint_->ReqHintsOffload(kPerfHintLargeCompCycle, hwc_tid);
+      break;
+    }
+  }
 }
 
 }  // namespace sdm
