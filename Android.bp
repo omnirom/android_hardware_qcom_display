@@ -46,7 +46,7 @@ qtidisplay_cc_defaults {
             cflags: ["-DTARGET_USES_GRALLOC4"],
         },
         udfps: {
-            cflags: ["-DUDFPS_ZPOS"],
+            cflags: ["-DFOD_ZPOS"],
         },
     },
 }
