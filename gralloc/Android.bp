@@ -38,10 +38,7 @@ cc_library_shared {
 //libgralloccore
 cc_library_shared {
     name: "libgralloccore",
-    defaults: [
-        "qtidisplay_common_defaults",
-        "gralloc_handle_has_reserved_size_defaults",
-    ],
+    defaults: ["qtidisplay_common_defaults"],
     sanitize: {
         integer_overflow: true,
     },
@@ -72,7 +69,10 @@ cc_library_shared {
         "-D__QTI_DISPLAY_GRALLOC__",
         "-Wno-sign-conversion",
         "-Wno-unused-parameter",
-    ],
+    ]+ select(soong_config_variable("qtidisplay", "gralloc_handle_has_reserved_size"), {
+        "true": ["-DGRALLOC_HANDLE_HAS_RESERVED_SIZE"],
+        default: [],
+    }),
     srcs: [
         "gr_allocator.cpp",
         "gr_buf_mgr.cpp",
